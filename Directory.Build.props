@@ -1,0 +1,35 @@
+<Project>
+  <!--
+    Directory.Build.props — applied to every project under the repo root.
+    Stage 1 scope: configuration only. No .csproj files exist yet (Stage 2).
+  -->
+
+  <PropertyGroup>
+    <!-- Language & target -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+
+    <!-- Deterministic builds (reproducible output, CI-friendly) -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!-- Analysis -->
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+
+    <!-- Warnings-as-errors only in Release so local dev stays friendly -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+    <WarningLevel>9999</WarningLevel>
+
+    <!-- Keep output tidy: everything lands under /artifacts -->
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+
+    <!-- Central Package Management + lock files -->
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

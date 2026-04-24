@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>App.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\app\src\App.Core\App.Core.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Services\App.Services.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Interop\App.Interop.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Shell\App.Shell.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+</Project>

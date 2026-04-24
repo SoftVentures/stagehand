@@ -1,0 +1,62 @@
+<Project>
+  <!--
+    Central Package Management (CPM) — all projects pull versions from here.
+    Enabled via <ManagePackageVersionsCentrally> in Directory.Build.props.
+
+    When bumping versions, update the decisions log in NOTES.md if the choice
+    is non-obvious (e.g. FluentAssertions pinned to 6.x due to 7.x licensing).
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Microsoft.Extensions — .NET 8 LTS line">
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+  </ItemGroup>
+
+  <ItemGroup Label="Serilog">
+    <PackageVersion Include="Serilog" Version="4.3.1" />
+    <!--
+      Pinned to 8.0.0 (not 9.x) because 9.x requires Microsoft.Extensions.Logging >= 9.0.0,
+      and we are on the .NET 8 LTS line for Microsoft.Extensions.*. Revisit when the baseline
+      moves to .NET 10 LTS.
+    -->
+    <PackageVersion Include="Serilog.Extensions.Logging" Version="8.0.0" />
+    <PackageVersion Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageVersion Include="Serilog.Sinks.Debug" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="UI / MVVM">
+    <!--
+      Pinned to 2.3.2 (not 2.4.x) because 2.4.x dropped the `net8.0-windows` TFM and targets
+      only `.NETFramework4.6.2` + `net10.0-windows7.0`. On a `net8.0-windows` target that yields
+      an NU1701 warning which becomes a Release build error under TreatWarningsAsErrors.
+      Revisit when moving to .NET 10.
+    -->
+    <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.3.2" />
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Core BCL">
+    <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test stack (xunit v2 + matching VS runner)">
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <!--
+      FluentAssertions pinned to 6.12.x. Version 7.0.0 relicensed under a
+      paid commercial model; 6.12.2 remains Apache-2.0 and is feature-complete
+      for our needs. Revisit only if we adopt a licensed alternative.
+    -->
+    <PackageVersion Include="FluentAssertions" Version="6.12.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>App.Interop</RootNamespace>
+    <AssemblyName>App.Interop</AssemblyName>
+    <!--
+      LibraryImport (.NET 8 source-generated P/Invoke) emits marshalling stubs that
+      use unsafe code (Span, pointers). Required for every [LibraryImport] in this
+      assembly. Has no effect on user code — we never write `unsafe` blocks.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

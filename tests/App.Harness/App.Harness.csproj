@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>App.Harness</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\app\src\App.Shell\App.Shell.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Services\App.Services.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Core\App.Core.csproj" />
+    <ProjectReference Include="..\..\app\src\App.Interop\App.Interop.csproj" />
+  </ItemGroup>
+</Project>

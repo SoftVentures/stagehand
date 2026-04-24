@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>App.Shell</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      WPF auto-generates the Main entry point from App.xaml (declared implicitly as
+      ApplicationDefinition by the WPF SDK). Stage 6 will move composition into
+      App.OnStartup, so no separate Program.cs is needed.
+    -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\App.Services\App.Services.csproj" />
+    <ProjectReference Include="..\App.Core\App.Core.csproj" />
+    <ProjectReference Include="..\App.Interop\App.Interop.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="H.NotifyIcon.Wpf" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+  <!--
+    Brand-asset Resource items are registered dynamically inside the
+    CopyBrandAssets target (see copy-brand-assets.targets) — declaring them
+    here at project scope with Condition="Exists(...)" races with the first
+    build because the ItemGroup is evaluated once at project load, before any
+    target runs. Do not add <Resource Include="Assets\TrayIcon*.ico" /> here.
+  -->
+  <Import Project="..\..\build\copy-brand-assets.targets" />
+</Project>

@@ -1,0 +1,54 @@
+version: 2
+updates:
+  # .NET packages pinned via Directory.Packages.props (Central Package Management).
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    commit-message:
+      prefix: dependabot
+      include: scope
+    groups:
+      nuget-all:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      nuget-majors:
+        patterns: ["*"]
+        update-types: ["major"]
+
+  # npm dev-dependency (Prettier only).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    labels:
+      - dependencies
+    commit-message:
+      prefix: dependabot
+      prefix-development: dependabot(dev)
+      include: scope
+    groups:
+      npm-all:
+        patterns: ["*"]
+
+  # CI actions pinned via `uses:`.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    labels:
+      - dependencies
+    commit-message:
+      prefix: dependabot
+      include: scope
+    groups:
+      actions-all:
+        patterns: ["*"]

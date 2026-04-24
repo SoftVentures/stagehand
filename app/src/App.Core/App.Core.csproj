@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>App.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\App.Interop\App.Interop.csproj" />
+    <PackageReference Include="System.Collections.Immutable" />
+  </ItemGroup>
+</Project>

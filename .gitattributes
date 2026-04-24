@@ -1,0 +1,47 @@
+# Auto-detect text files and normalise line endings on commit.
+* text=auto
+
+# Scripts always use LF regardless of host OS.
+*.sh text eol=lf
+
+# Windows-specific text that must stay CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Source & config.
+# Windows-only projects: pin CRLF on files CSharpier / dotnet format / MSBuild
+# rewrite, so cross-platform checkouts do not produce endless-diff loops.
+*.cs         text eol=crlf diff=csharp
+*.csproj     text eol=crlf
+*.props      text eol=crlf
+*.targets    text eol=crlf
+*.sln        text eol=crlf
+*.xaml       text eol=crlf
+*.manifest   text eol=crlf
+
+# Structured config kept LF-preferred (Prettier default; YAML/JSON tools are agnostic).
+*.xml        text
+*.json       text
+*.yml        text
+*.yaml       text
+*.md         text
+*.editorconfig text
+*.gitignore  text
+*.gitattributes text
+
+# SVG is text (searchable, diffable).
+*.svg text
+
+# Binary assets.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pfx binary
+*.snk binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pdb binary

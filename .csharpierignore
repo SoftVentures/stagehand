@@ -1,0 +1,9 @@
+# CSharpier 1.x formats XAML as well. XAML is handled by XAML Styler (xstyler)
+# in our toolchain, so exclude XAML files here to avoid conflicting rules.
+**/*.xaml
+
+# Generated and build artefacts.
+**/bin/
+**/obj/
+artifacts/
+**/packages.lock.json

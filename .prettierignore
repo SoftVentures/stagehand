@@ -1,0 +1,13 @@
+bin/
+obj/
+publish/
+node_modules/
+app/assets/brand/
+**/*.ico
+**/*.svg
+docs/plans/*.md
+artifacts/
+stage-manager-windows-plan.md
+
+# NuGet lock files — auto-generated, binary-ish, not meant for human formatting.
+**/packages.lock.json

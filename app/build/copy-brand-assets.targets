@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!--
+    Copies brand icon variants from app/assets/brand/icons/ into the App
+    project's Assets/ folder and registers them as WPF Resources in one step.
+
+    Why Resource items are declared INSIDE the target and not at project scope:
+      WPF Resource collection happens early in the build pipeline (before
+      CoreResGen / MarkupCompilePass1). A static <ItemGroup Condition="Exists(...)">
+      in the csproj is evaluated once at project load, long before any target
+      runs — so on a fresh clone the condition is false, the items never enter
+      the item graph, and the .ico files never get embedded even though the
+      Copy target later writes them to disk. Evaluating the ItemGroup inside
+      the target, scheduled BEFORE AssignTargetPaths, avoids that race: the
+      Copy runs, the files land on disk, the Resource items are added to the
+      dynamic item graph, and WPF's resource generator picks them up.
+
+    Note: the metadata name "Target" is reserved in MSBuild, so the per-item
+    destination uses "TargetPath" instead.
+  -->
+
+  <ItemGroup>
+    <StagehandBrandIcon Include="$(MSBuildThisFileDirectory)..\assets\brand\icons\colored\icon.ico">
+      <TargetPath>$(MSBuildThisFileDirectory)..\src\App.Shell\Assets\TrayIcon.ico</TargetPath>
+    </StagehandBrandIcon>
+    <StagehandBrandIcon Include="$(MSBuildThisFileDirectory)..\assets\brand\icons\dark\icon.ico">
+      <TargetPath>$(MSBuildThisFileDirectory)..\src\App.Shell\Assets\TrayIcon.Dark.ico</TargetPath>
+    </StagehandBrandIcon>
+    <StagehandBrandIcon Include="$(MSBuildThisFileDirectory)..\assets\brand\icons\light\icon.ico">
+      <TargetPath>$(MSBuildThisFileDirectory)..\src\App.Shell\Assets\TrayIcon.Light.ico</TargetPath>
+    </StagehandBrandIcon>
+  </ItemGroup>
+
+  <Target Name="CopyBrandAssets" BeforeTargets="AssignTargetPaths;BeforeBuild">
+    <Error
+      Condition="!Exists('%(StagehandBrandIcon.Identity)')"
+      Text="Brand asset missing: %(StagehandBrandIcon.Identity). Run Stage 3B / update app/assets/brand/icons/."
+    />
+    <Copy
+      SourceFiles="@(StagehandBrandIcon)"
+      DestinationFiles="@(StagehandBrandIcon->'%(TargetPath)')"
+      SkipUnchangedFiles="true"
+      OverwriteReadOnlyFiles="true"
+    >
+      <Output TaskParameter="CopiedFiles" ItemName="_StagehandBrandAssetsCopied" />
+    </Copy>
+    <Message
+      Text="Brand assets copied: @(_StagehandBrandAssetsCopied->'%(Filename)%(Extension)')"
+      Importance="low"
+    />
+
+    <!--
+      Register the freshly-copied .ico files as WPF Resources inside the target
+      so they enter the dynamic item graph. Declaring these at project scope
+      with Condition="Exists(...)" races with the first build (fixes I7 + C1).
+    -->
+    <ItemGroup>
+      <Resource Include="Assets\TrayIcon.ico" />
+      <Resource Include="Assets\TrayIcon.Dark.ico" />
+      <Resource Include="Assets\TrayIcon.Light.ico" />
+    </ItemGroup>
+  </Target>
+</Project>

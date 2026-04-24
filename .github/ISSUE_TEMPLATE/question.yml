@@ -1,0 +1,35 @@
+name: Question
+description: Ask a question about using or building Stagehand
+title: "question: <short summary>"
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome. If you suspect a bug, please use the Bug report template
+        instead so we can track reproduction steps and logs.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      placeholder: I want Stagehand to leave a specific app untouched while the stage is enabled.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Settings you adjusted, docs you read, commands you ran.
+    validations:
+      required: true
+
+  - type: textarea
+    id: unclear
+    attributes:
+      label: What's unclear?
+      description: Specifically, where did the current docs or UI leave you without an answer?
+    validations:
+      required: true

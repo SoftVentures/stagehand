@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Restore dotnet tools
+        run: dotnet tool restore
+
+      - name: Prettier check
+        run: npx prettier --check .
+
+      - name: CSharpier check
+        run: dotnet csharpier check .
+
+      - name: XAML Styler check
+        run: dotnet xstyler --recursive --directory app --passive
+
+      - name: dotnet format verify
+        run: dotnet format App.sln --verify-no-changes --severity warn
+
+      - name: Restore NuGet packages
+        run: dotnet restore App.sln --locked-mode
+
+      - name: Build
+        run: dotnet build App.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test App.sln -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Report vulnerable packages
+        continue-on-error: true
+        run: dotnet list package --vulnerable --include-transitive
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: "**/test-results.trx"
+          # upload-artifact v5+ fails when the same name is uploaded twice. We only
+          # have one upload here, but `overwrite: true` future-proofs against a
+          # matrix expansion or a re-run landing on the same artefact name.
+          overwrite: true

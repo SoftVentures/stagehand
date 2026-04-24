@@ -1,0 +1,28 @@
+# CODEOWNERS
+#
+# Rules are evaluated top-to-bottom; the last matching rule wins for each file.
+# Replace `@EinfachValle` with a GitHub team (e.g. `@SoftVentures/stagehand-maintainers`)
+# once the team exists, keeping the individual maintainer as a fallback at the top.
+
+# Fallback — everything is owned by the primary maintainer.
+*                  @EinfachValle
+
+# Interop layer — P/Invoke surface, review with care for marshalling bugs.
+/app/src/App.Interop/ @EinfachValle
+
+# Core domain — state machine + records consumed by every other assembly.
+/app/src/App.Core/ @EinfachValle
+
+# Composition root + global exception handlers.
+/app/src/App.Shell/Composition/ @EinfachValle
+/app/src/App.Shell/App.xaml.cs   @EinfachValle
+
+# Build glue and brand assets.
+/app/build/         @EinfachValle
+/app/assets/        @EinfachValle
+
+# Repository automation, workflows, and community health files.
+/.github/           @EinfachValle
+/CONTRIBUTING.md    @EinfachValle
+/SECURITY.md        @EinfachValle
+/CODE_OF_CONDUCT.md @EinfachValle

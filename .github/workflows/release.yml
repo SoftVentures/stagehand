@@ -1,0 +1,14 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Placeholder
+        run: echo "release workflow enabled in Plan 05"

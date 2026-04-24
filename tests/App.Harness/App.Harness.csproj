@@ -4,11 +4,20 @@
     <UseWPF>true</UseWPF>
     <IsPackable>false</IsPackable>
     <RootNamespace>App.Harness</RootNamespace>
+    <AssemblyName>App.Harness</AssemblyName>
+    <!--
+      Plan 02 §S9 — manual WPF test runner. Not included in CI; the release
+      workflow (app/docs/plans/05) must skip this project as well. Kept out
+      of the shipped surface via <IsPackable>false</IsPackable>.
+    -->
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\app\src\App.Shell\App.Shell.csproj" />
     <ProjectReference Include="..\..\app\src\App.Services\App.Services.csproj" />
     <ProjectReference Include="..\..\app\src\App.Core\App.Core.csproj" />
     <ProjectReference Include="..\..\app\src\App.Interop\App.Interop.csproj" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Serilog.Extensions.Logging" />
   </ItemGroup>
 </Project>

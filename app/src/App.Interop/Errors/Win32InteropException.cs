@@ -1,4 +1,4 @@
-namespace App.Core.Errors;
+namespace App.Interop.Errors;
 
 /// <summary>
 /// Thrown when a Win32 / native interop call fails unexpectedly.

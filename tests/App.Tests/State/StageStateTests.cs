@@ -16,7 +16,7 @@ public sealed class StageStateTests
     [Fact]
     public void Empty_IsDisabled_WithNoParkedWindows()
     {
-        var s = StageState.Empty;
+        StageState s = StageState.Empty;
 
         s.Phase.Should().Be(StagePhase.Disabled);
         s.Parked.Should().BeEmpty();
@@ -33,7 +33,7 @@ public sealed class StageStateTests
         // snapshots, not self-validating constructors). It is a contract upheld by
         // StageController — the test documents the expected invariant so future code
         // does not violate it silently.
-        var s = StageState.Empty;
+        StageState s = StageState.Empty;
         (s.Phase == StagePhase.Disabled && s.Parked.IsEmpty).Should().BeTrue();
     }
 
@@ -51,7 +51,10 @@ public sealed class StageStateTests
         // Device names like "\\\\.\\DISPLAY1" are returned by Win32 and are treated
         // as exact strings. Consumers that need case-insensitive lookup should wrap
         // explicitly.
-        var s = StageState.Empty.ActiveHwndByDevice.Add(@"\\.\DISPLAY1", IntPtr.Zero);
+        ImmutableDictionary<string, nint?> s = StageState.Empty.ActiveHwndByDevice.Add(
+            @"\\.\DISPLAY1",
+            IntPtr.Zero
+        );
 
         s.ContainsKey(@"\\.\display1").Should().BeFalse();
         s.ContainsKey(@"\\.\DISPLAY1").Should().BeTrue();
@@ -63,8 +66,8 @@ public sealed class StageStateTests
         // Guards against a well-meaning "fix" swapping the default comparer for
         // StringComparer.OrdinalIgnoreCase, which would silently break multi-monitor
         // restore (two distinct Win32 device names could then collapse into one key).
-        var activeCmp = StageState.Empty.ActiveHwndByDevice.KeyComparer;
-        var workAreaCmp = StageState.Empty.SavedWorkAreasByDevice.KeyComparer;
+        IEqualityComparer<string> activeCmp = StageState.Empty.ActiveHwndByDevice.KeyComparer;
+        IEqualityComparer<string> workAreaCmp = StageState.Empty.SavedWorkAreasByDevice.KeyComparer;
 
         activeCmp.Equals(@"\\.\DISPLAY1", @"\\.\display1").Should().BeFalse();
         workAreaCmp.Equals(@"\\.\DISPLAY1", @"\\.\display1").Should().BeFalse();

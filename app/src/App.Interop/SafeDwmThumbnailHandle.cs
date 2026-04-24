@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
 namespace App.Interop;
@@ -32,7 +33,20 @@ public sealed class SafeDwmThumbnailHandle : SafeHandleZeroOrMinusOneIsInvalid
     /// <inheritdoc />
     protected override bool ReleaseHandle()
     {
-        // TODO: Plan 02 — call NativeMethods.DwmUnregisterThumbnail(handle) and return result.
-        return false;
+        // SafeHandle must not take a DI dependency — its finalizer runs on a
+        // background thread and may fire after the DI container is gone. Call
+        // the P/Invoke directly. `DwmUnregisterThumbnail` is declared with
+        // `PreserveSig = false`, so a non-zero HRESULT surfaces as COMException;
+        // swallow it and report failure via the `false` return. The CLR logs
+        // the SafeHandle release failure through SafeHandle diagnostics.
+        try
+        {
+            NativeMethods.DwmUnregisterThumbnail(handle);
+            return true;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
     }
 }

@@ -1,11 +1,14 @@
 using System;
+using App.Core.Layout;
 using App.Core.Stage;
 using App.Core.Time;
 using App.Interop;
+using App.Interop.Threading;
 using App.Services.Hotkeys;
 using App.Services.Logging;
 using App.Services.Settings;
 using App.Services.Updates;
+using App.Services.Windows;
 using App.Shell.Settings;
 using App.Shell.Tray;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,18 +35,32 @@ public static class ServiceConfiguration
         // Clock (settings depend on it).
         services.AddSingleton<IClock, SystemClock>();
 
+        // UI-thread marshalling seam. The Dispatcher instance is supplied by
+        // the caller (ShellApp.OnStartup) so we never reach into
+        // Application.Current from the DI module — that keeps the registration
+        // testable and avoids an ambient static dependency.
+        services.AddSingleton<UiDispatcher>(_ => new UiDispatcher(
+            System.Windows.Application.Current.Dispatcher
+        ));
+
         // Settings (real).
         services.AddSingleton<SettingsMigrator>();
         services.AddSingleton<ISettingsService, SettingsService>();
 
-        // Interop + core stubs targeting Plans 02-05.
-        services.AddSingleton<IWindowEnumerator, NotImplementedWindowEnumerator>();
-        services.AddSingleton<IWindowController, NotImplementedWindowController>();
+        // Plan 02 window mechanics.
+        services.AddSingleton<IWindowEnumerator, WindowEnumerator>();
+        services.AddSingleton<IWindowController, WindowController>();
+        services.AddSingleton<IWindowFilter, WindowFilter>();
+        services.AddSingleton<IManageableWindowService, ManageableWindowService>();
+        services.AddSingleton<IDwmThumbnailFactory, DwmThumbnailFactory>();
+        services.AddSingleton<IThumbnailLayoutEngine, ThumbnailLayoutEngine>();
+        services.AddSingleton<WinEventHookThread>();
+        services.AddSingleton<IWinEventHookFactory, WinEventHookFactory>();
+
+        // Stubs targeting Plans 03–05.
         services.AddSingleton<IWorkAreaManager, NotImplementedWorkAreaManager>();
-        services.AddSingleton<IWinEventHook, NotImplementedWinEventHook>();
         services.AddSingleton<IStageController, NotImplementedStageController>();
         services.AddSingleton<IStageLayoutEngine, NotImplementedStageLayoutEngine>();
-        services.AddSingleton<IWindowFilter, NotImplementedWindowFilter>();
         services.AddSingleton<IHotkeyService, StubHotkeyService>();
         services.AddSingleton<IUpdateService, StubUpdateService>();
 

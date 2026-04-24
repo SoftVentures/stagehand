@@ -17,5 +17,16 @@ public interface IDwmThumbnail : IDisposable
     /// </summary>
     /// <param name="destinationRect">Destination rectangle in physical pixels, relative to the destination HWND's client area.</param>
     /// <param name="opacity">0 (transparent) to 255 (opaque). Defaults to fully opaque.</param>
-    void UpdateDestination(Rect destinationRect, byte opacity = 255);
+    void UpdateDestinationRect(Rect destinationRect, byte opacity = 255);
+
+    /// <summary>
+    /// Sets or clears the source-crop rectangle. Passing <see langword="null"/>
+    /// restores the default (full source window). The crop takes effect on
+    /// the next <see cref="UpdateDestinationRect"/> call.
+    /// </summary>
+    /// <param name="cropInSourcePixels">
+    /// Crop rectangle in source-window pixel coordinates, or
+    /// <see langword="null"/> to clear.
+    /// </param>
+    void SetSourceCrop(Rect? cropInSourcePixels);
 }

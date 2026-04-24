@@ -148,7 +148,7 @@ public sealed class SettingsService : ISettingsService
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(_paths.SettingsFilePath));
-            var fromVersion = doc.RootElement.TryGetProperty("schemaVersion", out var v)
+            var fromVersion = doc.RootElement.TryGetProperty("schemaVersion", out JsonElement v)
                 ? v.GetInt32()
                 : AppSettings.CurrentSchemaVersion;
 

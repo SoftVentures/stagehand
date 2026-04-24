@@ -30,7 +30,7 @@ public static class LoggingConfiguration
         const string template =
             "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
-        var cfg = new LoggerConfiguration()
+        LoggerConfiguration cfg = new LoggerConfiguration()
             .MinimumLevel.Information()
             .Enrich.FromLogContext()
             .WriteTo.File(
@@ -51,7 +51,7 @@ public static class LoggingConfiguration
         );
 #endif
 
-        var serilog = cfg.CreateLogger();
+        Serilog.Core.Logger serilog = cfg.CreateLogger();
 
         builder.ClearProviders();
         builder.AddSerilog(serilog, dispose: true);

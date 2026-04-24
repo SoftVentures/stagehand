@@ -1,0 +1,275 @@
+using System;
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using App.Interop;
+using App.Services.Windows;
+using App.Shell.Overlay;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Rect = App.Interop.Rect;
+
+namespace App.Harness;
+
+/// <summary>
+/// Plan 02 §S9 harness main window. Wires up the buttons required by the
+/// Plan 02 acceptance-criteria manual checklist.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Services are pulled from the <see cref="HarnessApp"/>'s root
+/// <see cref="IServiceProvider"/>. The harness is single-window, single-use;
+/// there is no need for a DI scope per interaction.
+/// </para>
+/// <para>
+/// <b>Sidebar lifecycle.</b> "Show Sidebar" resolves a fresh
+/// <see cref="SidebarOverlay"/> from DI each time the user toggles the
+/// button on: WPF's <see cref="Window.Close"/> (invoked by the previous
+/// <c>HideAndRelease</c>) permanently disposes the window's native peer, so
+/// re-showing the same instance is not supported.
+/// </para>
+/// <para>
+/// <b>Resource counter.</b> A 1 Hz <see cref="DispatcherTimer"/> polls
+/// <c>GetGuiResources</c> for the harness process — the Plan 02 §Acceptance
+/// Criteria soak test watches these for leaks over a 10-minute run.
+/// </para>
+/// </remarks>
+public partial class MainWindow : Window
+{
+    private static readonly Action<ILogger, IntPtr, Exception?> s_logParkFailed =
+        LoggerMessage.Define<IntPtr>(
+            LogLevel.Warning,
+            new EventId(6001, "HarnessParkFailed"),
+            "Park failed for HWND 0x{Hwnd:X}."
+        );
+
+    private static readonly Action<ILogger, IntPtr, Exception?> s_logRestoreFailed =
+        LoggerMessage.Define<IntPtr>(
+            LogLevel.Warning,
+            new EventId(6002, "HarnessRestoreFailed"),
+            "Restore failed for HWND 0x{Hwnd:X}."
+        );
+
+    private readonly IServiceProvider _services;
+    private readonly WindowListViewModel _viewModel;
+    private readonly IWindowController _controller;
+    private readonly IWinEventHookFactory _hookFactory;
+    private readonly ILogger<MainWindow> _log;
+    private readonly IntPtr _currentProcessHandle;
+    private readonly DispatcherTimer _resourceTimer;
+
+    private SidebarOverlay? _sidebar;
+    private WinEventHook? _winEventHook;
+
+    // Additional hooks kept alive for disposal on window close. Separate from
+    // _winEventHook so the "already registered" guard has a single flag.
+    private readonly System.Collections.Generic.List<WinEventHook> _compositeHooks = [];
+
+    public MainWindow()
+        : this(((HarnessApp)Application.Current).Services) { }
+
+    internal MainWindow(IServiceProvider services)
+    {
+        _services = services ?? throw new ArgumentNullException(nameof(services));
+
+        _viewModel = new WindowListViewModel(
+            services.GetRequiredService<IManageableWindowService>()
+        );
+        _controller = services.GetRequiredService<IWindowController>();
+        _hookFactory = services.GetRequiredService<IWinEventHookFactory>();
+        _log = services.GetRequiredService<ILogger<MainWindow>>();
+        _currentProcessHandle = Process.GetCurrentProcess().Handle;
+
+        InitializeComponent();
+        WindowList.ItemsSource = _viewModel.Windows;
+
+        _resourceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _resourceTimer.Tick += (_, _) => UpdateResourceCounters();
+
+        Loaded += OnLoaded;
+        Closed += OnWindowClosed;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        // Seed the list on open so the user sees state immediately.
+        _ = _viewModel.Refresh();
+        UpdateResourceCounters();
+        _resourceTimer.Start();
+    }
+
+    private void OnWindowClosed(object? sender, EventArgs e)
+    {
+        _resourceTimer.Stop();
+        _winEventHook?.Dispose();
+        _winEventHook = null;
+        foreach (WinEventHook hook in _compositeHooks)
+        {
+            hook.Dispose();
+        }
+        _compositeHooks.Clear();
+        _sidebar?.HideAndRelease();
+        _sidebar = null;
+    }
+
+    // ---------- Button handlers ----------
+
+    private void OnRefreshClicked(object sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<WindowSnapshot> snapshots = _viewModel.Refresh();
+        // If the sidebar is currently visible, push the new list through its
+        // Sync pipeline so thumbnails reflect the refresh result.
+        _sidebar?.Sync(snapshots);
+    }
+
+    private void OnShowSidebarClicked(object sender, RoutedEventArgs e)
+    {
+        if (_sidebar is not null)
+        {
+            // Toggle off.
+            _sidebar.HideAndRelease();
+            _sidebar = null;
+            ShowSidebarButton.Content = "Show Sidebar";
+            return;
+        }
+
+        // Resolve a fresh overlay from DI (transient registration in HarnessApp).
+        _sidebar = _services.GetRequiredService<SidebarOverlay>();
+
+        // Anchor on the monitor currently hosting this harness window.
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTOPRIMARY);
+        _sidebar.ShowOn(monitor);
+        _sidebar.Sync(_viewModel.Refresh());
+        ShowSidebarButton.Content = "Hide Sidebar";
+    }
+
+    private void OnParkClicked(object sender, RoutedEventArgs e)
+    {
+        if (WindowList.SelectedItem is not WindowSnapshot snap)
+        {
+            return;
+        }
+
+        // Cache the original bounds so "Restore" has somewhere to put it back.
+        _viewModel.ParkedOriginalBounds[snap.Hwnd] = snap.Bounds;
+
+        // Park off-screen at the canonical (-32000, -32000) slot while
+        // preserving the original size. WindowController applies the
+        // NOZORDER | NOACTIVATE | NOREDRAW flags internally.
+        var parkingRect = new Rect(-32000, -32000, snap.Bounds.Width, snap.Bounds.Height);
+        try
+        {
+            _controller.Park(snap.Hwnd, parkingRect);
+            AppendHookLog($"Park: hwnd=0x{snap.Hwnd:X} title='{snap.Title}'");
+        }
+        catch (Exception ex)
+        {
+            AppendHookLog($"Park FAILED: {ex.GetType().Name}: {ex.Message}");
+            s_logParkFailed(_log, snap.Hwnd, ex);
+        }
+    }
+
+    private void OnRestoreClicked(object sender, RoutedEventArgs e)
+    {
+        if (WindowList.SelectedItem is not WindowSnapshot snap)
+        {
+            return;
+        }
+        if (!_viewModel.ParkedOriginalBounds.TryGetValue(snap.Hwnd, out Rect originalBounds))
+        {
+            AppendHookLog($"Restore skipped — no cached bounds for hwnd=0x{snap.Hwnd:X}");
+            return;
+        }
+
+        try
+        {
+            _controller.RestorePosition(snap.Hwnd, originalBounds);
+            _viewModel.ParkedOriginalBounds.Remove(snap.Hwnd);
+            AppendHookLog($"Restore: hwnd=0x{snap.Hwnd:X} → {originalBounds}");
+        }
+        catch (Exception ex)
+        {
+            AppendHookLog($"Restore FAILED: {ex.GetType().Name}: {ex.Message}");
+            s_logRestoreFailed(_log, snap.Hwnd, ex);
+        }
+    }
+
+    private void OnRegisterHookClicked(object sender, RoutedEventArgs e)
+    {
+        if (_winEventHook is not null)
+        {
+            AppendHookLog("Hook already registered — ignoring click.");
+            return;
+        }
+
+        // Plan 02 §Design.9: create / destroy / foreground is enough to
+        // prove the hook thread + dispatcher marshalling work.
+        // EVENT_OBJECT_CREATE=0x8000, EVENT_OBJECT_DESTROY=0x8001,
+        // EVENT_SYSTEM_FOREGROUND=0x0003. The min/max window has to span
+        // foreground..destroy, so we install two hooks — one for the low
+        // event id (foreground) and one for the high range (create/destroy).
+        var foregroundSpec = new WinEventSpec(EventMin: 0x0003, EventMax: 0x0003);
+        var objectSpec = new WinEventSpec(EventMin: 0x8000, EventMax: 0x8001);
+
+        WinEventHook fg = _hookFactory.Create(foregroundSpec);
+        WinEventHook obj = _hookFactory.Create(objectSpec);
+
+        fg.Fired += (_, args) => OnHookFired("FG", args);
+        obj.Fired += (_, args) => OnHookFired("OBJ", args);
+
+        // Keep the foreground one as the disposable anchor; we wrap both in
+        // a composite to dispose cleanly on window close.
+        _winEventHook = fg;
+        _compositeHooks.Add(obj);
+
+        RegisterHookButton.IsEnabled = false;
+        AppendHookLog("Hook registered (FOREGROUND + CREATE/DESTROY).");
+    }
+
+    private void OnHookFired(string tag, WinEventArgs args)
+    {
+        // Arrives on the UI thread (WinEventHook.Fired is marshalled through
+        // UiDispatcher.Post). Safe to touch WPF UI here.
+        AppendHookLog(
+            $"[{tag}] event=0x{args.EventId:X4} hwnd=0x{args.Hwnd:X} tid={args.Thread} t={args.Time}"
+        );
+    }
+
+    // ---------- UI helpers ----------
+
+    private void OnWindowSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var hasSelection = WindowList.SelectedItem is WindowSnapshot;
+        ParkButton.IsEnabled = hasSelection;
+        RestoreButton.IsEnabled = hasSelection;
+    }
+
+    private void AppendHookLog(string line)
+    {
+        // Cap log size so a long-running session doesn't OOM the TextBox.
+        const int MaxChars = 64 * 1024;
+        HookLog.AppendText($"{DateTime.Now:HH:mm:ss.fff}  {line}{Environment.NewLine}");
+        if (HookLog.Text.Length > MaxChars)
+        {
+            HookLog.Text = HookLog.Text[^MaxChars..];
+        }
+        HookLog.ScrollToEnd();
+    }
+
+    private void UpdateResourceCounters()
+    {
+        var gdi = NativeMethods.GetGuiResources(_currentProcessHandle, NativeMethods.GR_GDIOBJECTS);
+        var usr = NativeMethods.GetGuiResources(
+            _currentProcessHandle,
+            NativeMethods.GR_USEROBJECTS
+        );
+        GdiObjectsText.Text = $"GDI objects: {gdi}";
+        UserObjectsText.Text = $"User objects: {usr}";
+    }
+}

@@ -92,7 +92,7 @@ public sealed class SettingsServiceTests : IDisposable
         // Parseable as JSON — no corruption.
         var json = await File.ReadAllTextAsync(_paths.SettingsFilePath, CancellationToken.None)
             .ConfigureAwait(true);
-        var act = () => JsonDocument.Parse(json);
+        Func<JsonDocument> act = () => JsonDocument.Parse(json);
         act.Should().NotThrow();
     }
 
@@ -120,16 +120,13 @@ public sealed class SettingsServiceTests : IDisposable
         criticalCalls.Should().Be(1, "the schema-too-high branch must log Critical exactly once");
     }
 
-    private sealed class InMemorySettingsPathProvider : ISettingsPathProvider
+    private sealed class InMemorySettingsPathProvider(
+        string settingsFilePath,
+        string logDirectoryPath
+    ) : ISettingsPathProvider
     {
-        public InMemorySettingsPathProvider(string settingsFilePath, string logDirectoryPath)
-        {
-            SettingsFilePath = settingsFilePath;
-            LogDirectoryPath = logDirectoryPath;
-        }
+        public string SettingsFilePath { get; } = settingsFilePath;
 
-        public string SettingsFilePath { get; }
-
-        public string LogDirectoryPath { get; }
+        public string LogDirectoryPath { get; } = logDirectoryPath;
     }
 }

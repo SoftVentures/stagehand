@@ -447,6 +447,11 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEXW lpmi);
 
+    // consumer: plan 02 §SidebarOverlay (per-monitor DPI scaling)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdpiforwindow"/>
+    [LibraryImport("user32.dll")]
+    internal static partial uint GetDpiForWindow(IntPtr hwnd);
+
     // ---------------------------------------------------------------------
     // System parameters (work area)
     // ---------------------------------------------------------------------
@@ -494,6 +499,20 @@ internal static partial class NativeMethods
     // Window messages
     // ---------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    // Resource counters (GDI / user objects) — harness diagnostic
+    // ---------------------------------------------------------------------
+
+    // GetGuiResources dwFlags — see
+    // <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getguiresources"/>
+    internal const uint GR_GDIOBJECTS = 0;
+    internal const uint GR_USEROBJECTS = 1;
+
+    // consumer: plan 02 §S9 Harness (GDI/user-object soak test)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getguiresources"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial uint GetGuiResources(IntPtr hProcess, uint uiFlags);
+
     // consumer: plan 02 §SingleInstance
     /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerwindowmessagew"/>
     [DllImport(
@@ -504,5 +523,75 @@ internal static partial class NativeMethods
     )]
     internal static extern uint RegisterWindowMessage(
         [MarshalAs(UnmanagedType.LPWStr)] string lpString
+    );
+
+    // ---------------------------------------------------------------------
+    // Thread message pump (WinEventHookThread)
+    // ---------------------------------------------------------------------
+
+    // Standard message ids used by the hook thread's manual pump.
+    // <see href="https://learn.microsoft.com/windows/win32/winmsg/wm-quit"/>
+    internal const uint WM_QUIT = 0x0012;
+
+    // <see href="https://learn.microsoft.com/windows/win32/winmsg/wm-user"/>
+    internal const uint WM_USER = 0x0400;
+
+    /// <summary>
+    /// Message payload used by <c>GetMessage</c> / <c>PeekMessage</c>.
+    /// </summary>
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/ns-winuser-msg"/>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+        public uint lPrivate;
+    }
+
+    // consumer: plan 02 §WinEventHookThread
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmessagew"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "GetMessageW"
+    )]
+    internal static extern int GetMessage(
+        out MSG lpMsg,
+        IntPtr hWnd,
+        uint wMsgFilterMin,
+        uint wMsgFilterMax
+    );
+
+    // consumer: plan 02 §WinEventHookThread
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-translatemessage"/>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool TranslateMessage(in MSG lpMsg);
+
+    // consumer: plan 02 §WinEventHookThread
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-dispatchmessagew"/>
+    [DllImport("user32.dll", EntryPoint = "DispatchMessageW")]
+    internal static extern IntPtr DispatchMessage(in MSG lpMsg);
+
+    // consumer: plan 02 §WinEventHookThread
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-postthreadmessagew"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "PostThreadMessageW"
+    )]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostThreadMessage(
+        uint idThread,
+        uint Msg,
+        IntPtr wParam,
+        IntPtr lParam
     );
 }

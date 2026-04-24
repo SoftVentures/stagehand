@@ -161,11 +161,9 @@ public sealed class TrayIconHost : IDisposable
 }
 
 /// <summary>Minimal <see cref="ICommand"/> adapter for non-MVVM tray callbacks.</summary>
-internal sealed class DelegateCommand : ICommand
+internal sealed class DelegateCommand(Action action) : ICommand
 {
-    private readonly Action _action;
-
-    public DelegateCommand(Action action) => _action = action;
+    private readonly Action _action = action;
 
     public bool CanExecute(object? parameter) => true;
 

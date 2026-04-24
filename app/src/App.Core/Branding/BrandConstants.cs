@@ -71,4 +71,22 @@ public static class BrandConstants
 
     /// <summary>Title of the Settings window.</summary>
     public const string SettingsWindowTitle = $"{ProductName} — Settings";
+
+    /// <summary>Title of the sidebar overlay window.</summary>
+    public const string OverlayWindowTitle = $"{ProductName} — Overlay";
+
+    /// <summary>
+    /// Win32 window-class name used for Plan 02's sidebar overlay windows.
+    /// Consumed by the window-filter exclusion list so our own overlays are
+    /// never enumerated as managed windows.
+    /// </summary>
+    public const string OverlayWindowClassName = $"{ProductName}-Overlay";
+
+    /// <summary>
+    /// Win32 window-class name used for the Settings window so the window
+    /// filter can exclude it from enumeration. The actual WPF window class
+    /// name is set via a window-class registration in Plan 04; this string
+    /// is the single source of truth.
+    /// </summary>
+    public const string SettingsWindowClassName = $"{ProductName}-Settings";
 }

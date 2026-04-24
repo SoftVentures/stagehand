@@ -9,5 +9,15 @@
       assembly. Has no effect on user code — we never write `unsafe` blocks.
     -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      UiDispatcher (Threading/UiDispatcher.cs) wraps System.Windows.Threading.Dispatcher.
+      Enabling UseWPF here pulls in WindowsBase.dll / PresentationCore.dll so the type
+      is visible. No XAML is declared in this assembly — UseWPF just makes the WPF
+      framework references available. Consumers in App.Shell own the Dispatcher instance.
+    -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
 </Project>

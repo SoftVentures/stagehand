@@ -55,7 +55,11 @@ public partial class ShellApp : Application
         ArgumentNullException.ThrowIfNull(e);
         base.OnStartup(e);
 
-        var args = ParseArgs(e.Args);
+        // IDE0042 (deconstruct) fights IDE0007/IDE0008 (var vs explicit) on
+        // the deconstructed form — keep it as a named-tuple access instead.
+#pragma warning disable IDE0042
+        (bool verbose, bool dryRun, bool diagnostics) args = ParseArgs(e.Args);
+#pragma warning restore IDE0042
 
         var paths = new AppDataSettingsPathProvider();
 
@@ -69,7 +73,7 @@ public partial class ShellApp : Application
         );
 
         _log = _services.GetRequiredService<ILogger<ShellApp>>();
-        LogStarting(_log, args.Verbose, args.DryRun, null);
+        LogStarting(_log, args.verbose, args.dryRun, null);
 
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -79,10 +83,10 @@ public partial class ShellApp : Application
         // tray starts.
         _ = _services.GetRequiredService<ISettingsService>();
 
-        var tray = _services.GetRequiredService<TrayIconHost>();
+        TrayIconHost tray = _services.GetRequiredService<TrayIconHost>();
         tray.Start();
 
-        if (args.Diagnostics)
+        if (args.diagnostics)
         {
             OpenLogsFolder(paths.LogDirectoryPath);
         }

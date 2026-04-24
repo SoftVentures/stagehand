@@ -34,10 +34,10 @@ public sealed record StageState(
     /// <summary>The canonical empty state: Stage disabled, nothing parked, not paused.</summary>
     public static readonly StageState Empty = new(
         StagePhase.Disabled,
-        ImmutableList<ParkedWindow>.Empty,
+        [],
         ImmutableDictionary<string, IntPtr?>.Empty,
         ImmutableDictionary<string, SavedWorkArea>.Empty,
-        ImmutableList<WindowIdentity>.Empty,
+        [],
         IsPaused: false
     );
 }

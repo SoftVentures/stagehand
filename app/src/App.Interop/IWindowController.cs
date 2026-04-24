@@ -13,11 +13,11 @@ public interface IWindowController
     /// </summary>
     /// <param name="hwnd">Target window handle.</param>
     /// <param name="parkingRect">Destination rectangle in physical pixels.</param>
-    void ParkOffscreen(IntPtr hwnd, Rect parkingRect);
+    void Park(IntPtr hwnd, Rect parkingRect);
 
     /// <summary>
     /// Restores <paramref name="hwnd"/> to the given original rectangle
-    /// (typically recorded before <see cref="ParkOffscreen"/>).
+    /// (typically recorded before <see cref="Park"/>).
     /// </summary>
     /// <param name="hwnd">Target window handle.</param>
     /// <param name="original">Rectangle to restore to, in physical pixels.</param>

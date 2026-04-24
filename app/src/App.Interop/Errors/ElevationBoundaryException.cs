@@ -1,4 +1,4 @@
-namespace App.Core.Errors;
+namespace App.Interop.Errors;
 
 /// <summary>
 /// Thrown when an unelevated Stagehand process attempts to control an elevated

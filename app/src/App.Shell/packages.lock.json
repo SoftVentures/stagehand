@@ -332,7 +332,10 @@
         }
       },
       "app.interop": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "[8.0.3, )"
+        }
       },
       "app.services": {
         "type": "Project",

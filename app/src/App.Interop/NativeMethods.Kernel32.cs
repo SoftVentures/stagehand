@@ -35,6 +35,11 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     internal static partial uint GetCurrentProcessId();
 
+    // consumer: plan 02 §WindowController (AttachThreadInput dance)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentthreadid"/>
+    [LibraryImport("kernel32.dll")]
+    internal static partial uint GetCurrentThreadId();
+
     // consumer: plan 02 §WindowEnumerator (stable identity)
     /// <see href="https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocess"/>
     [LibraryImport("kernel32.dll", SetLastError = true)]

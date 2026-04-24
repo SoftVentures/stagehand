@@ -1,4 +1,4 @@
-namespace App.Core.Errors;
+namespace App.Interop.Errors;
 
 /// <summary>
 /// Thrown when a window cannot be enumerated, filtered, or controlled by Stagehand.

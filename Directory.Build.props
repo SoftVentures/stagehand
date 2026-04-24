@@ -25,8 +25,14 @@
     <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
     <WarningLevel>9999</WarningLevel>
 
-    <!-- Keep output tidy: everything lands under /artifacts -->
-    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <!--
+      Keep output tidy in CI: everything lands under /artifacts. Locally we
+      fall back to the classic per-project obj/bin layout so IDEs (VS, Rider,
+      OmniSharp) can find WPF design-time generated *.g.i.cs files for
+      IntelliSense. UseArtifactsOutput is a .NET 8 feature that not every IDE
+      version consumes correctly for design-time build.
+    -->
+    <UseArtifactsOutput Condition="'$(CI)' == 'true'">true</UseArtifactsOutput>
 
     <!-- Central Package Management + lock files -->
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>

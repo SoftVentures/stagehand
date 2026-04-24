@@ -2,6 +2,12 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <RootNamespace>App.Tests</RootNamespace>
+    <!--
+      Test methods routinely construct short-lived IDisposables inside an
+      arrange-block; requiring `using` on every local obscures the scenario
+      and adds no real value (xUnit constructs a fresh instance per test).
+    -->
+    <NoWarn>$(NoWarn);CA2000</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\app\src\App.Core\App.Core.csproj" />

@@ -568,6 +568,28 @@ internal static partial class NativeMethods
         uint wMsgFilterMax
     );
 
+    // PM_NOREMOVE: leave the message in the queue (we only call PeekMessage to
+    // force the thread message queue into existence — the pump's GetMessage
+    // loop is the real consumer).
+    internal const uint PM_NOREMOVE = 0x0000;
+
+    // consumer: plan 02 §WinEventHookThread (queue-creation guarantee)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-peekmessagew"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "PeekMessageW"
+    )]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PeekMessage(
+        out MSG lpMsg,
+        IntPtr hWnd,
+        uint wMsgFilterMin,
+        uint wMsgFilterMax,
+        uint wRemoveMsg
+    );
+
     // consumer: plan 02 §WinEventHookThread
     /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-translatemessage"/>
     [DllImport("user32.dll")]

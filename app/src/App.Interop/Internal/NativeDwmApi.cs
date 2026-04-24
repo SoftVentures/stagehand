@@ -27,6 +27,18 @@ internal sealed class NativeDwmApi : INativeDwmApi
                 ex
             );
         }
+        catch (ArgumentException ex)
+        {
+            // DWM marshals E_INVALIDARG (0x80070057) into ArgumentException
+            // for HWNDs it refuses to register: source == destination, source
+            // is cloaked / not a top-level window, source belongs to a different
+            // session, etc. Surface as our typed exception so callers can swallow.
+            throw new Win32InteropException(
+                unchecked((int)0x80070057u),
+                "DwmRegisterThumbnail rejected the source/destination pair (E_INVALIDARG).",
+                ex
+            );
+        }
     }
 
     /// <inheritdoc />

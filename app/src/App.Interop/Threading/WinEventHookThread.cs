@@ -176,8 +176,17 @@ public sealed class WinEventHookThread(ILogger<WinEventHookThread> log) : IDispo
         }
 
         // Wait for the pump to publish its thread id so PostThreadMessage
-        // has somewhere to deliver wake-ups.
-        _threadReady.Wait();
+        // has somewhere to deliver wake-ups. A bounded wait prevents the
+        // caller from deadlocking if the STA thread itself failed to start
+        // (e.g. ThreadAbortException during COM init on a locked-down host) —
+        // the Plan-02 harness hit this with an indefinite freeze on the
+        // "Register hook" button before the timeout was added.
+        if (!_threadReady.Wait(TimeSpan.FromSeconds(5)))
+        {
+            throw new InvalidOperationException(
+                "WinEventHook pump thread failed to start within 5 seconds."
+            );
+        }
     }
 
     private void WakeUpPump()
@@ -199,11 +208,20 @@ public sealed class WinEventHookThread(ILogger<WinEventHookThread> log) : IDispo
     {
         try
         {
-            // Force the thread to have a message queue (required before any
-            // other thread is allowed to PostThreadMessage to it). Any user
-            // message works; PeekMessage is the idiomatic form but GetMessage
-            // works equally well once the queue exists.
+            // Force the thread message queue to be created BEFORE we publish
+            // _threadId / signal _threadReady. Without this, a caller that
+            // races our first GetMessage call will PostThreadMessage to a
+            // thread that has no queue yet — Windows silently drops the
+            // message and the pump never wakes up, so InvokeAsync hangs.
+            // PeekMessage is documented to allocate the queue on first call.
             _threadId = NativeMethods.GetCurrentThreadId();
+            _ = NativeMethods.PeekMessage(
+                out _,
+                IntPtr.Zero,
+                0,
+                0,
+                NativeMethods.PM_NOREMOVE
+            );
             _threadReady.Set();
 
             s_logThreadStarted(_log, null);

@@ -131,7 +131,24 @@ public sealed class WinEventHook : IDisposable
             );
         });
 
-        installTask.GetAwaiter().GetResult();
+        // Bounded wait: if the hook thread is wedged we must not hang the
+        // constructor indefinitely (the Plan-02 harness's "Register hook"
+        // button froze the whole app here before the timeout was added).
+        // A faulted install surfaces through `Wait` throwing AggregateException —
+        // we unwrap to the underlying exception for a cleaner stack.
+        try
+        {
+            if (!installTask.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new InvalidOperationException(
+                    "SetWinEventHook installation timed out after 5 seconds."
+                );
+            }
+        }
+        catch (AggregateException ae) when (ae.InnerException is not null)
+        {
+            throw ae.InnerException;
+        }
     }
 
     /// <summary>

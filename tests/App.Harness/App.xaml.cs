@@ -1,4 +1,8 @@
 using System;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using App.Core.Layout;
 using App.Core.Stage;
@@ -10,6 +14,8 @@ using App.Services.Windows;
 using App.Shell.Overlay;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Serilog;
+using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace App.Harness;
 
@@ -34,14 +40,48 @@ namespace App.Harness;
 /// controller, thumbnails, layout engine, hook infrastructure) so we wire
 /// them here by hand and keep the harness's startup cost minimal.
 /// </para>
+/// <para>
+/// <b>Diagnostics.</b> The harness installs a full logger fan-out
+/// (Debug sink for IDEs, <see cref="Console"/> via <c>AddSimpleConsole</c>,
+/// and a Serilog rolling file under the harness temp log folder) plus
+/// global exception handlers on the dispatcher, app domain, and task
+/// scheduler. The Plan-02 checklist revealed that the previous
+/// <c>AddDebug</c>-only setup silently dropped every runtime error when
+/// the harness was launched without a debugger attached.
+/// </para>
 /// </remarks>
 public partial class HarnessApp : Application
 {
+    private static readonly Action<ILogger, Exception?> s_logStarted = LoggerMessage.Define(
+        LogLevel.Information,
+        new EventId(1, "HarnessStarted"),
+        "Harness started. Console output is live."
+    );
+
+    private static readonly Action<ILogger, string, Exception?> s_logUnhandled =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(2, "HarnessUnhandled"),
+            "Unhandled exception from {Source}."
+        );
+
     private ServiceProvider? _services;
+    private ILogger<HarnessApp>? _log;
 
     /// <summary>The DI container the harness's window resolves services from.</summary>
     internal IServiceProvider Services =>
         _services ?? throw new InvalidOperationException("OnStartup has not run yet.");
+
+    /// <summary>
+    /// Allocates a console for the current process so
+    /// <c>AddSimpleConsole</c> and <see cref="Console.WriteLine(string)"/>
+    /// have somewhere to land when the harness is launched standalone (not
+    /// via <c>dotnet run</c> from an existing terminal).
+    /// </summary>
+    [LibraryImport("kernel32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AllocConsole();
 
     /// <inheritdoc />
     protected override void OnStartup(StartupEventArgs e)
@@ -49,12 +89,44 @@ public partial class HarnessApp : Application
         ArgumentNullException.ThrowIfNull(e);
         base.OnStartup(e);
 
+        // Pop a console window so harness users see log output even when
+        // launched standalone (double-click, File Explorer, etc.). When
+        // invoked via `dotnet run --project tests/App.Harness` from an
+        // existing terminal the call still returns true but produces no
+        // additional window — the existing shell receives stdout.
+        _ = AllocConsole();
+
         var services = new ServiceCollection();
         ConfigureHarness(services);
 
         _services = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }
         );
+
+        _log = _services.GetRequiredService<ILogger<HarnessApp>>();
+
+        // Global exception handlers — without these WPF silently swallows
+        // exceptions thrown from event handlers, which is exactly how the
+        // Plan-02 harness ended up appearing to "do nothing" on click.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            LogUnhandled("DispatcherUnhandledException", args.Exception);
+            args.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+            {
+                LogUnhandled("AppDomain.UnhandledException", ex);
+            }
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            LogUnhandled("TaskScheduler.UnobservedTaskException", args.Exception);
+            args.SetObserved();
+        };
+
+        s_logStarted(_log, null);
     }
 
     /// <inheritdoc />
@@ -65,6 +137,26 @@ public partial class HarnessApp : Application
         base.OnExit(e);
     }
 
+    private void LogUnhandled(string source, Exception ex)
+    {
+        // Fallback to Console directly in case the logger itself is what
+        // blew up — a silent handler is worse than a loud one here.
+        try
+        {
+            if (_log is not null)
+            {
+                s_logUnhandled(_log, source, ex);
+            }
+        }
+#pragma warning disable CA1031 // General catch: harness diagnostics must never re-throw.
+        catch
+        {
+            // deliberate swallow
+        }
+#pragma warning restore CA1031
+        Console.Error.WriteLine($"[{source}] {ex}");
+    }
+
     /// <summary>
     /// Registers the minimum service graph the Plan 02 harness needs to
     /// exercise every Wave-1/2 seam. No tray icon, no settings window —
@@ -72,12 +164,41 @@ public partial class HarnessApp : Application
     /// </summary>
     private static void ConfigureHarness(IServiceCollection services)
     {
-        // Logging: console-only for the harness. Serilog/file logging would
-        // be overkill for a hand-driven run.
+        // Logging: fan out to Debug (IDE output), Console (stdout — visible
+        // once AllocConsole has run in OnStartup), and Serilog rolling files
+        // under the harness log directory.
+        var logDir = new HarnessSettingsPathProvider().LogDirectoryPath;
+        _ = Directory.CreateDirectory(logDir);
+        var logFilePath = Path.Combine(logDir, "harness-.log");
+
+        const string template =
+            "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
+
+        Serilog.Core.Logger serilog = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .Enrich.FromLogContext()
+            .WriteTo.File(
+                path: logFilePath,
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 7,
+                fileSizeLimitBytes: 5L * 1024 * 1024,
+                rollOnFileSizeLimit: true,
+                shared: true,
+                outputTemplate: template,
+                formatProvider: CultureInfo.InvariantCulture
+            )
+            .CreateLogger();
+
         services.AddLogging(builder =>
         {
             _ = builder.AddFilter(level => level >= LogLevel.Debug);
             _ = builder.AddDebug();
+            _ = builder.AddSimpleConsole(o =>
+            {
+                o.SingleLine = true;
+                o.TimestampFormat = "HH:mm:ss ";
+            });
+            _ = builder.AddSerilog(serilog, dispose: true);
         });
 
         // UI-thread marshalling seam. Application.Current.Dispatcher points
@@ -119,9 +240,9 @@ public partial class HarnessApp : Application
     private sealed class HarnessSettingsPathProvider : ISettingsPathProvider
     {
         public string SettingsFilePath { get; } =
-            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "stagehand-harness-settings.json");
+            Path.Combine(Path.GetTempPath(), "stagehand-harness-settings.json");
 
         public string LogDirectoryPath { get; } =
-            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "stagehand-harness-logs");
+            Path.Combine(Path.GetTempPath(), "stagehand-harness-logs");
     }
 }

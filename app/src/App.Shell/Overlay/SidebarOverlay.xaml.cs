@@ -76,6 +76,25 @@ public sealed partial class SidebarOverlay : Window
         "SidebarOverlay: WM_DPICHANGED — recomputing layout."
     );
 
+    private static readonly Action<ILogger, Exception?> s_logShowFault = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(5004, nameof(SidebarOverlay) + ".ShowFault"),
+        "SidebarOverlay: Show() threw."
+    );
+
+    private static readonly Action<ILogger, Exception?> s_logSyncFault = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(5005, nameof(SidebarOverlay) + ".SyncFault"),
+        "SidebarOverlay: Sync() threw."
+    );
+
+    private static readonly Action<ILogger, IntPtr, Exception?> s_logMonitorFallback =
+        LoggerMessage.Define<IntPtr>(
+            LogLevel.Warning,
+            new EventId(5006, nameof(SidebarOverlay) + ".MonitorFallback"),
+            "SidebarOverlay.ShowOn: monitor handle 0x{Monitor:X} was NULL/unknown; falling back to primary monitor."
+        );
+
     private readonly IDwmThumbnailFactory _thumbnails;
     private readonly IThumbnailLayoutEngine _layout;
     private readonly ILogger<SidebarOverlay> _log;
@@ -126,18 +145,54 @@ public sealed partial class SidebarOverlay : Window
     /// receptive to <see cref="Sync"/> calls. Subsequent <see cref="ShowOn"/>
     /// invocations re-position the existing window (no re-creation).
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "The overlay's first Show() must never let a WPF resource/rendering failure tear down the caller — log loudly and keep the app interactive. The Plan-02 harness specifically surfaces a crash here."
+    )]
     public void ShowOn(IntPtr monitor)
     {
-        _monitor = OverlayMonitor.Resolve(monitor, _log);
+        // Fall back to the primary monitor when MonitorFromWindow returned
+        // IntPtr.Zero (happens with detached / minimised / cross-session
+        // HWNDs). A null HMONITOR would otherwise propagate into
+        // GetMonitorInfo and throw Win32InteropException — the Plan-02
+        // harness's "Show Sidebar" button crashed on this path.
+        var effectiveMonitor = monitor;
+        if (effectiveMonitor == IntPtr.Zero)
+        {
+            s_logMonitorFallback(_log, monitor, null);
+            effectiveMonitor = NativeMethods.MonitorFromWindow(
+                IntPtr.Zero,
+                NativeMethods.MONITOR_DEFAULTTOPRIMARY
+            );
+        }
+
+        _monitor = OverlayMonitor.Resolve(effectiveMonitor, _log);
         PositionWindow();
 
         if (!IsVisible)
         {
-            Show();
+            try
+            {
+                Show();
+            }
+            catch (Exception ex)
+            {
+                s_logShowFault(_log, ex);
+                throw;
+            }
         }
 
         // Re-run last layout against new geometry (idempotent if no windows).
-        RecomputeAndApplyLayout();
+        try
+        {
+            RecomputeAndApplyLayout();
+        }
+        catch (Exception ex)
+        {
+            s_logSyncFault(_log, ex);
+            throw;
+        }
     }
 
     /// <summary>
@@ -168,12 +223,30 @@ public sealed partial class SidebarOverlay : Window
     /// thumbnails: removes vanished entries, registers new ones, then runs
     /// the layout engine and pushes each destination rectangle to DWM.
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Sync is driven by harness clicks / hook events; a single badly-behaved HWND must not tear the overlay down. Failures are logged; the caller retries on next refresh."
+    )]
     public void Sync(IReadOnlyList<WindowSnapshot> windows)
     {
         ArgumentNullException.ThrowIfNull(windows);
         _lastWindows = windows;
         s_logSync(_log, windows.Count, null);
 
+        try
+        {
+            SyncCore(windows);
+        }
+        catch (Exception ex)
+        {
+            s_logSyncFault(_log, ex);
+            throw;
+        }
+    }
+
+    private void SyncCore(IReadOnlyList<WindowSnapshot> windows)
+    {
         if (_hwnd == IntPtr.Zero)
         {
             // Window handle not yet realised — the caller invoked Sync before
@@ -208,6 +281,12 @@ public sealed partial class SidebarOverlay : Window
         {
             WindowIdentity id = ToIdentity(w);
             if (_liveThumbnails.ContainsKey(id))
+            {
+                continue;
+            }
+            // DWM rejects source==destination with E_INVALIDARG; skip the
+            // overlay's own HWND if it ever shows up in the input list.
+            if (w.Hwnd == _hwnd)
             {
                 continue;
             }

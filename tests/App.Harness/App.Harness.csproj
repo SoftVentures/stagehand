@@ -9,7 +9,15 @@
       Plan 02 §S9 — manual WPF test runner. Not included in CI; the release
       workflow (app/docs/plans/05) must skip this project as well. Kept out
       of the shipped surface via <IsPackable>false</IsPackable>.
+
+      <AllowUnsafeBlocks>true</AllowUnsafeBlocks> is required because the
+      harness uses [LibraryImport] to P/Invoke kernel32!AllocConsole so the
+      harness logger's console sink has a visible stdout sink when the user
+      double-launches the exe. Mirrors the App.Interop setting for the
+      same reason (LibraryImport source generator emits pointer marshalling
+      stubs in unsafe-code form).
     -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\app\src\App.Shell\App.Shell.csproj" />

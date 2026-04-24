@@ -35,6 +35,14 @@ namespace App.Harness;
 /// <c>GetGuiResources</c> for the harness process — the Plan 02 §Acceptance
 /// Criteria soak test watches these for leaks over a 10-minute run.
 /// </para>
+/// <para>
+/// <b>Defensive handlers.</b> Every button handler is wrapped in a
+/// <c>try/catch</c> that logs to the in-window <c>HookLog</c>, the
+/// <see cref="ILogger{TCategoryName}"/> (console + file), and swallows the
+/// exception so the harness remains interactive. The Plan-02 checklist
+/// discovered that an un-caught exception inside <c>OnLoaded</c> made the
+/// window appear inert (no listbox content, no visible error).
+/// </para>
 /// </remarks>
 public partial class MainWindow : Window
 {
@@ -50,6 +58,13 @@ public partial class MainWindow : Window
             LogLevel.Warning,
             new EventId(6002, "HarnessRestoreFailed"),
             "Restore failed for HWND 0x{Hwnd:X}."
+        );
+
+    private static readonly Action<ILogger, string, Exception?> s_logHandlerFault =
+        LoggerMessage.Define<string>(
+            LogLevel.Error,
+            new EventId(6003, "HarnessHandlerFault"),
+            "Harness handler {Handler} threw."
         );
 
     private readonly IServiceProvider _services;
@@ -89,166 +104,214 @@ public partial class MainWindow : Window
         {
             Interval = TimeSpan.FromSeconds(1),
         };
-        _resourceTimer.Tick += (_, _) => UpdateResourceCounters();
+        _resourceTimer.Tick += (_, _) =>
+            SafeInvoke(nameof(UpdateResourceCounters), UpdateResourceCounters);
 
         Loaded += OnLoaded;
         Closed += OnWindowClosed;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        // Seed the list on open so the user sees state immediately.
-        _ = _viewModel.Refresh();
-        UpdateResourceCounters();
-        _resourceTimer.Start();
-    }
+    private void OnLoaded(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnLoaded),
+            () =>
+            {
+                // Seed the list on open so the user sees state immediately.
+                IReadOnlyList<WindowSnapshot> snapshots = _viewModel.Refresh();
+                AppendHookLog($"Initial refresh: {snapshots.Count} manageable window(s).");
+                UpdateResourceCounters();
+                _resourceTimer.Start();
+            }
+        );
 
-    private void OnWindowClosed(object? sender, EventArgs e)
-    {
-        _resourceTimer.Stop();
-        _winEventHook?.Dispose();
-        _winEventHook = null;
-        foreach (WinEventHook hook in _compositeHooks)
-        {
-            hook.Dispose();
-        }
-        _compositeHooks.Clear();
-        _sidebar?.HideAndRelease();
-        _sidebar = null;
-    }
+    private void OnWindowClosed(object? sender, EventArgs e) =>
+        SafeInvoke(
+            nameof(OnWindowClosed),
+            () =>
+            {
+                _resourceTimer.Stop();
+                _winEventHook?.Dispose();
+                _winEventHook = null;
+                foreach (WinEventHook hook in _compositeHooks)
+                {
+                    hook.Dispose();
+                }
+                _compositeHooks.Clear();
+                _sidebar?.HideAndRelease();
+                _sidebar = null;
+            }
+        );
 
     // ---------- Button handlers ----------
 
-    private void OnRefreshClicked(object sender, RoutedEventArgs e)
-    {
-        IReadOnlyList<WindowSnapshot> snapshots = _viewModel.Refresh();
-        // If the sidebar is currently visible, push the new list through its
-        // Sync pipeline so thumbnails reflect the refresh result.
-        _sidebar?.Sync(snapshots);
-    }
-
-    private void OnShowSidebarClicked(object sender, RoutedEventArgs e)
-    {
-        if (_sidebar is not null)
-        {
-            // Toggle off.
-            _sidebar.HideAndRelease();
-            _sidebar = null;
-            ShowSidebarButton.Content = "Show Sidebar";
-            return;
-        }
-
-        // Resolve a fresh overlay from DI (transient registration in HarnessApp).
-        _sidebar = _services.GetRequiredService<SidebarOverlay>();
-
-        // Anchor on the monitor currently hosting this harness window.
-        var hwnd = new WindowInteropHelper(this).Handle;
-        var monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MONITOR_DEFAULTTOPRIMARY);
-        _sidebar.ShowOn(monitor);
-        _sidebar.Sync(_viewModel.Refresh());
-        ShowSidebarButton.Content = "Hide Sidebar";
-    }
-
-    private void OnParkClicked(object sender, RoutedEventArgs e)
-    {
-        if (WindowList.SelectedItem is not WindowSnapshot snap)
-        {
-            return;
-        }
-
-        // Cache the original bounds so "Restore" has somewhere to put it back.
-        _viewModel.ParkedOriginalBounds[snap.Hwnd] = snap.Bounds;
-
-        // Park off-screen at the canonical (-32000, -32000) slot while
-        // preserving the original size. WindowController applies the
-        // NOZORDER | NOACTIVATE | NOREDRAW flags internally.
-        var parkingRect = new Rect(-32000, -32000, snap.Bounds.Width, snap.Bounds.Height);
-        try
-        {
-            _controller.Park(snap.Hwnd, parkingRect);
-            AppendHookLog($"Park: hwnd=0x{snap.Hwnd:X} title='{snap.Title}'");
-        }
-        catch (Exception ex)
-        {
-            AppendHookLog($"Park FAILED: {ex.GetType().Name}: {ex.Message}");
-            s_logParkFailed(_log, snap.Hwnd, ex);
-        }
-    }
-
-    private void OnRestoreClicked(object sender, RoutedEventArgs e)
-    {
-        if (WindowList.SelectedItem is not WindowSnapshot snap)
-        {
-            return;
-        }
-        if (!_viewModel.ParkedOriginalBounds.TryGetValue(snap.Hwnd, out Rect originalBounds))
-        {
-            AppendHookLog($"Restore skipped — no cached bounds for hwnd=0x{snap.Hwnd:X}");
-            return;
-        }
-
-        try
-        {
-            _controller.RestorePosition(snap.Hwnd, originalBounds);
-            _viewModel.ParkedOriginalBounds.Remove(snap.Hwnd);
-            AppendHookLog($"Restore: hwnd=0x{snap.Hwnd:X} → {originalBounds}");
-        }
-        catch (Exception ex)
-        {
-            AppendHookLog($"Restore FAILED: {ex.GetType().Name}: {ex.Message}");
-            s_logRestoreFailed(_log, snap.Hwnd, ex);
-        }
-    }
-
-    private void OnRegisterHookClicked(object sender, RoutedEventArgs e)
-    {
-        if (_winEventHook is not null)
-        {
-            AppendHookLog("Hook already registered — ignoring click.");
-            return;
-        }
-
-        // Plan 02 §Design.9: create / destroy / foreground is enough to
-        // prove the hook thread + dispatcher marshalling work.
-        // EVENT_OBJECT_CREATE=0x8000, EVENT_OBJECT_DESTROY=0x8001,
-        // EVENT_SYSTEM_FOREGROUND=0x0003. The min/max window has to span
-        // foreground..destroy, so we install two hooks — one for the low
-        // event id (foreground) and one for the high range (create/destroy).
-        var foregroundSpec = new WinEventSpec(EventMin: 0x0003, EventMax: 0x0003);
-        var objectSpec = new WinEventSpec(EventMin: 0x8000, EventMax: 0x8001);
-
-        WinEventHook fg = _hookFactory.Create(foregroundSpec);
-        WinEventHook obj = _hookFactory.Create(objectSpec);
-
-        fg.Fired += (_, args) => OnHookFired("FG", args);
-        obj.Fired += (_, args) => OnHookFired("OBJ", args);
-
-        // Keep the foreground one as the disposable anchor; we wrap both in
-        // a composite to dispose cleanly on window close.
-        _winEventHook = fg;
-        _compositeHooks.Add(obj);
-
-        RegisterHookButton.IsEnabled = false;
-        AppendHookLog("Hook registered (FOREGROUND + CREATE/DESTROY).");
-    }
-
-    private void OnHookFired(string tag, WinEventArgs args)
-    {
-        // Arrives on the UI thread (WinEventHook.Fired is marshalled through
-        // UiDispatcher.Post). Safe to touch WPF UI here.
-        AppendHookLog(
-            $"[{tag}] event=0x{args.EventId:X4} hwnd=0x{args.Hwnd:X} tid={args.Thread} t={args.Time}"
+    private void OnRefreshClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnRefreshClicked),
+            () =>
+            {
+                IReadOnlyList<WindowSnapshot> snapshots = _viewModel.Refresh();
+                AppendHookLog($"Refresh: {snapshots.Count} manageable window(s).");
+                // If the sidebar is currently visible, push the new list through its
+                // Sync pipeline so thumbnails reflect the refresh result.
+                _sidebar?.Sync(snapshots);
+            }
         );
-    }
+
+    private void OnShowSidebarClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnShowSidebarClicked),
+            () =>
+            {
+                if (_sidebar is not null)
+                {
+                    // Toggle off.
+                    _sidebar.HideAndRelease();
+                    _sidebar = null;
+                    ShowSidebarButton.Content = "Show Sidebar";
+                    AppendHookLog("Sidebar hidden.");
+                    return;
+                }
+
+                // Resolve a fresh overlay from DI (transient registration in HarnessApp).
+                _sidebar = _services.GetRequiredService<SidebarOverlay>();
+
+                // Anchor on the monitor currently hosting this harness window.
+                var hwnd = new WindowInteropHelper(this).Handle;
+                var monitor = NativeMethods.MonitorFromWindow(
+                    hwnd,
+                    NativeMethods.MONITOR_DEFAULTTOPRIMARY
+                );
+                _sidebar.ShowOn(monitor);
+                _sidebar.Sync(_viewModel.Refresh());
+                ShowSidebarButton.Content = "Hide Sidebar";
+                AppendHookLog($"Sidebar shown on monitor=0x{monitor:X}.");
+            }
+        );
+
+    private void OnParkClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnParkClicked),
+            () =>
+            {
+                if (WindowList.SelectedItem is not WindowSnapshot snap)
+                {
+                    AppendHookLog("Park skipped — no selection.");
+                    return;
+                }
+
+                // Cache the original bounds so "Restore" has somewhere to put it back.
+                _viewModel.ParkedOriginalBounds[snap.Hwnd] = snap.Bounds;
+
+                // Park off-screen at the canonical (-32000, -32000) slot while
+                // preserving the original size. WindowController applies the
+                // NOZORDER | NOACTIVATE | NOREDRAW flags internally.
+                var parkingRect = new Rect(-32000, -32000, snap.Bounds.Width, snap.Bounds.Height);
+                try
+                {
+                    _controller.Park(snap.Hwnd, parkingRect);
+                    AppendHookLog($"Park: hwnd=0x{snap.Hwnd:X} title='{snap.Title}'");
+                }
+                catch (Exception ex)
+                {
+                    AppendHookLog($"Park FAILED: {ex.GetType().Name}: {ex.Message}");
+                    s_logParkFailed(_log, snap.Hwnd, ex);
+                }
+            }
+        );
+
+    private void OnRestoreClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnRestoreClicked),
+            () =>
+            {
+                if (WindowList.SelectedItem is not WindowSnapshot snap)
+                {
+                    AppendHookLog("Restore skipped — no selection.");
+                    return;
+                }
+                if (
+                    !_viewModel.ParkedOriginalBounds.TryGetValue(snap.Hwnd, out Rect originalBounds)
+                )
+                {
+                    AppendHookLog($"Restore skipped — no cached bounds for hwnd=0x{snap.Hwnd:X}");
+                    return;
+                }
+
+                try
+                {
+                    _controller.RestorePosition(snap.Hwnd, originalBounds);
+                    _ = _viewModel.ParkedOriginalBounds.Remove(snap.Hwnd);
+                    AppendHookLog($"Restore: hwnd=0x{snap.Hwnd:X} → {originalBounds}");
+                }
+                catch (Exception ex)
+                {
+                    AppendHookLog($"Restore FAILED: {ex.GetType().Name}: {ex.Message}");
+                    s_logRestoreFailed(_log, snap.Hwnd, ex);
+                }
+            }
+        );
+
+    private void OnRegisterHookClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnRegisterHookClicked),
+            () =>
+            {
+                if (_winEventHook is not null)
+                {
+                    AppendHookLog("Hook already registered — ignoring click.");
+                    return;
+                }
+
+                // Plan 02 §Design.9: create / destroy / foreground is enough to
+                // prove the hook thread + dispatcher marshalling work.
+                // EVENT_OBJECT_CREATE=0x8000, EVENT_OBJECT_DESTROY=0x8001,
+                // EVENT_SYSTEM_FOREGROUND=0x0003. The min/max window has to span
+                // foreground..destroy, so we install two hooks — one for the low
+                // event id (foreground) and one for the high range (create/destroy).
+                var foregroundSpec = new WinEventSpec(EventMin: 0x0003, EventMax: 0x0003);
+                var objectSpec = new WinEventSpec(EventMin: 0x8000, EventMax: 0x8001);
+
+                WinEventHook fg = _hookFactory.Create(foregroundSpec);
+                WinEventHook obj = _hookFactory.Create(objectSpec);
+
+                fg.Fired += (_, args) => OnHookFired("FG", args);
+                obj.Fired += (_, args) => OnHookFired("OBJ", args);
+
+                // Keep the foreground one as the disposable anchor; we wrap both in
+                // a composite to dispose cleanly on window close.
+                _winEventHook = fg;
+                _compositeHooks.Add(obj);
+
+                RegisterHookButton.IsEnabled = false;
+                AppendHookLog("Hook registered (FOREGROUND + CREATE/DESTROY).");
+            }
+        );
+
+    private void OnHookFired(string tag, WinEventArgs args) =>
+        SafeInvoke(
+            nameof(OnHookFired),
+            () =>
+            {
+                // Arrives on the UI thread (WinEventHook.Fired is marshalled through
+                // UiDispatcher.Post). Safe to touch WPF UI here.
+                AppendHookLog(
+                    $"[{tag}] event=0x{args.EventId:X4} hwnd=0x{args.Hwnd:X} tid={args.Thread} t={args.Time}"
+                );
+            }
+        );
 
     // ---------- UI helpers ----------
 
-    private void OnWindowSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var hasSelection = WindowList.SelectedItem is WindowSnapshot;
-        ParkButton.IsEnabled = hasSelection;
-        RestoreButton.IsEnabled = hasSelection;
-    }
+    private void OnWindowSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnWindowSelectionChanged),
+            () =>
+            {
+                var hasSelection = WindowList.SelectedItem is WindowSnapshot;
+                ParkButton.IsEnabled = hasSelection;
+                RestoreButton.IsEnabled = hasSelection;
+            }
+        );
 
     private void AppendHookLog(string line)
     {
@@ -272,4 +335,33 @@ public partial class MainWindow : Window
         GdiObjectsText.Text = $"GDI objects: {gdi}";
         UserObjectsText.Text = $"User objects: {usr}";
     }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> under a blanket try/catch that logs
+    /// the failure to the on-screen <c>HookLog</c>, the <see cref="ILogger"/>
+    /// (console + file sinks), and swallows the exception so the WPF
+    /// dispatcher does not tear the app down. Applied to every button
+    /// handler after the Plan-02 checklist found silent failures.
+    /// </summary>
+#pragma warning disable CA1031 // General catch is exactly the harness's purpose here.
+    private void SafeInvoke(string handler, Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                AppendHookLog($"ERROR in {handler}: {ex.GetType().Name}: {ex.Message}");
+            }
+            catch
+            {
+                // If even the log write fails (UI torn down?) there's nothing sane to do.
+            }
+            s_logHandlerFault(_log, handler, ex);
+        }
+    }
+#pragma warning restore CA1031
 }

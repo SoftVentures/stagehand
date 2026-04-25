@@ -39,25 +39,45 @@
                 SelectionChanged="OnWindowSelectionChanged">
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <StackPanel Margin="2,4">
-                            <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
-                            <TextBlock FontSize="10" Foreground="#666">
-                                <Run Text="class=" />
-                                <Run Text="{Binding ClassName}" />
-                                <Run Text="  hwnd=0x" />
-                                <Run Text="{Binding Hwnd, StringFormat=X}" />
-                            </TextBlock>
-                            <TextBlock FontSize="10" Foreground="#666">
-                                <Run Text="bounds=" />
-                                <Run Text="{Binding Bounds.X}" />
-                                <Run Text="," />
-                                <Run Text="{Binding Bounds.Y}" />
-                                <Run Text=" " />
-                                <Run Text="{Binding Bounds.Width}" />
-                                <Run Text="x" />
-                                <Run Text="{Binding Bounds.Height}" />
-                            </TextBlock>
-                        </StackPanel>
+                        <Grid Margin="2,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border
+                                Grid.Column="0"
+                                Width="112"
+                                Height="63"
+                                Margin="0,0,8,0"
+                                Background="#1A000000"
+                                BorderBrush="#22000000"
+                                BorderThickness="1">
+                                <!--  Stretch=Uniform preserves source aspect ratio inside the 16:9 box.  -->
+                                <Image
+                                    RenderOptions.BitmapScalingMode="HighQuality"
+                                    Source="{Binding Preview, Mode=OneWay}"
+                                    Stretch="Uniform" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock FontWeight="SemiBold" Text="{Binding Snapshot.Title, Mode=OneWay}" />
+                                <TextBlock FontSize="10" Foreground="#666">
+                                    <Run Text="class=" />
+                                    <Run Text="{Binding Snapshot.ClassName, Mode=OneWay}" />
+                                    <Run Text="  hwnd=0x" />
+                                    <Run Text="{Binding Snapshot.Hwnd, Mode=OneWay, StringFormat=X}" />
+                                </TextBlock>
+                                <TextBlock FontSize="10" Foreground="#666">
+                                    <Run Text="bounds=" />
+                                    <Run Text="{Binding Snapshot.Bounds.X, Mode=OneWay}" />
+                                    <Run Text="," />
+                                    <Run Text="{Binding Snapshot.Bounds.Y, Mode=OneWay}" />
+                                    <Run Text=" " />
+                                    <Run Text="{Binding Snapshot.Bounds.Width, Mode=OneWay}" />
+                                    <Run Text="x" />
+                                    <Run Text="{Binding Snapshot.Bounds.Height, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </Grid>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
@@ -94,6 +114,13 @@
                     Padding="8,4"
                     Click="OnRestoreClicked"
                     Content="Restore (selected)"
+                    IsEnabled="False" />
+                <Button
+                    x:Name="KillButton"
+                    Margin="0,2"
+                    Padding="8,4"
+                    Click="OnKillClicked"
+                    Content="Kill (selected)"
                     IsEnabled="False" />
                 <Button
                     x:Name="RegisterHookButton"

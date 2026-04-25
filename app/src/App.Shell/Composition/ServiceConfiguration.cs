@@ -53,6 +53,8 @@ public static class ServiceConfiguration
         services.AddSingleton<IWindowFilter, WindowFilter>();
         services.AddSingleton<IManageableWindowService, ManageableWindowService>();
         services.AddSingleton<IDwmThumbnailFactory, DwmThumbnailFactory>();
+        services.AddSingleton<IBitmapThumbnailFactory, BitmapThumbnailFactory>();
+        services.AddSingleton<IThumbnailSourceFactory, ThumbnailSourceFactory>();
         services.AddSingleton<IThumbnailLayoutEngine, ThumbnailLayoutEngine>();
         services.AddSingleton<WinEventHookThread>();
         services.AddSingleton<IWinEventHookFactory, WinEventHookFactory>();

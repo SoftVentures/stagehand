@@ -51,8 +51,11 @@ After this plan, there is no "Phase 10". Stagehand is in maintenance mode, with 
 11. **Elevation boundary.** Launching an elevated app under Stagehand: the app appears in the sidebar with a small shield icon overlay. Trying to click-swap it brings it to front but does not park; on disable, no restore attempt is made for it. A tooltip explains.
 12. **Clean uninstall.** `winget uninstall Stagehand.Stagehand` removes the app; `%APPDATA%\Stagehand\` and `%LOCALAPPDATA%\Stagehand\` are preserved (user data); the autostart `.lnk` is removed.
 13. **Supply chain gate.** CI blocks the release if `dotnet list package --vulnerable` reports any Critical or High CVE. SBOM attached to the release.
-14. **Unit tests.** ≥20 new cases across update service, fullscreen detector, virtual-desktop filter, DPI coordinator, cloaking detector.
+14. **Unit tests.** ≥25 new cases across update service, fullscreen detector, virtual-desktop filter, DPI coordinator, cloaking detector, cloak-responder bitmap fallback, scene-aware orphan cleanup.
 15. **Manual checklist** at `docs/manual-tests/plan-05.md` — all scenarios verified.
+16. **Cloak-aware bitmap fallback.** Park a Calculator window. Force-cloak it (minimise to system tray, or use the harness's "force cloak" action). Expect: within 2 s, its sidebar tile shows the captured bitmap from park time (not a black DWM thumbnail). Restore the window. Expect: the tile resumes live DWM rendering.
+17. **Scene-shaped snapshot recovery.** Force-kill Stagehand while enabled with two multi-window scenes (e.g. Notepad ×2 in scene A, Edge ×3 in scene B). Restart Stagehand. Expect: the recovery balloon reads "Restore 2 stages with 5 windows? (Restore / Discard)". Restore. Expect: all 5 windows return to their pre-enable rectangles; scene grouping is reconstructed from the snapshot if Stagehand is enabled again.
+18. **Desktop-icons reconciliation.** Enable Stagehand with `HideDesktopIconsWhenStageActive = true` (icons hidden). Force-kill Stagehand. Restart. Expect: desktop icons are visible again _before_ the recovery balloon appears; the balloon then offers window-position restore as usual.
 
 ---
 
@@ -247,25 +250,36 @@ Test matrix:
 - Drag active window from 150 % to 100 %: active window resizes to fill main area at 100 %.
 - Hot-plug a 4K-at-200 % monitor: new sidebar created at correct size.
 
-### 8. Cloaked UWP detection (regression)
+### 8. Cloaked UWP detection (regression) + bitmap fallback wiring
 
 `WindowFilter` already calls `DwmGetWindowAttribute(DWMWA_CLOAKED)`. This plan adds:
 
 - A `CloakStateMonitor` that polls cloak state every 2 s (no Win32 event for un-cloaking exists).
 - On uncloak transition → add window to stage.
 - On cloak transition while parked → park action is idempotent; user will see an empty main area. Handle by re-choosing an active window (next parked).
+- **Bitmap-fallback wiring** for parked windows that go cloaked: instead of showing a black DWM thumbnail, swap the affected `IThumbnailSource` (Plan 02 §Design.6) to a `BitmapThumbnailSource` whose snapshot was captured at park time. The affected sidebar tile shows the captured bitmap until the window uncloaks; on uncloak, swap back to the live `DwmThumbnailSource`.
 
-Regression test: install a Store app (e.g. Calculator), minimise to tray (if supported) or cloak via a test harness, verify filter.
+Concrete swap protocol inside `CloakStateMonitor`:
+
+1. Subscribe `IStageOverlayHost.SyncMonitor` is already invoked on every state change; this monitor signals state changes via `Cloaked(WindowIdentity)` / `Uncloaked(WindowIdentity)` events.
+2. `StageController` (or a small `CloakResponder` service to keep `StageController` lean) holds a `Dictionary<WindowIdentity, ThumbnailSnapshot>` of park-time captures, populated by Plan 03 §EnableAsync step 9 calling `IThumbnailSourceFactory.Capture(hwnd)` once per parked window.
+3. On `Cloaked(id)`: dispose the live DWM source for `id`'s scene tile if `id == scene.Primary`, register a `BitmapThumbnailSource` from the cached snapshot, and trigger `SyncMonitor` on the affected device. (If the cloaked window is non-Primary, no visible change is needed.)
+4. On `Uncloaked(id)`: reverse — dispose the bitmap source, re-register a DWM source via `IThumbnailSourceFactory.RegisterDwm`, sync.
+5. If a window is cloaked _at park time_ already (rare; e.g. a UWP that was minimised when `EnableAsync` ran): try DWM first; if `DwmQueryThumbnailSourceSize` returns a degenerate size or the thumbnail is observably black after one frame, fall back immediately to bitmap. The capture step handles the degenerate-rect case (Plan 02 §Design.6b step 1) so the bitmap path is always callable.
+
+Regression test: install a Store app (e.g. Calculator), minimise to tray (if supported) or cloak via a test harness, verify filter behaviour AND verify the sidebar tile renders the cached bitmap rather than a black DWM thumbnail.
 
 ### 9. Orphan cleanup
 
 `StageController` subscribes to `EVENT_OBJECT_DESTROY` (already in Plan 03). On destroy:
 
-1. If HWND in `Parked`: remove from list, unregister thumbnail, drop saved bounds.
-2. If HWND == `ActiveHwndByDevice[device]`: pick the next window in `Parked` on the same monitor as the new active, resize it to main area, `BringToFront`.
-3. If no parked windows remain on the monitor: leave the main area empty (wallpaper visible) until the user opens a new window or Alt-Tabs.
+1. If HWND is a member of any `Scene`: remove from that scene's `Windows` list, unregister thumbnail, drop saved bounds. If the scene becomes empty, remove the scene from `ScenesByDevice`. If the destroyed HWND was the scene's `Primary` and other windows remain, promote the next member (oldest by `Scene.CreatedAt` proxy → first in `Windows`) to Primary and re-register the live thumbnail against it.
+2. If the affected scene was the active scene of its monitor (`ActiveSceneByDevice[device]`) AND the scene is now empty: pick the next parked scene on the same monitor as the new active scene, resize all its windows to main area, `BringToFront(scene.Primary)`. If no parked scenes remain, set `ActiveSceneByDevice[device] = null` and leave the main area empty (wallpaper visible).
+3. If the affected scene was active but other windows remain (e.g. one window of a 3-window scene died): no swap needed — the remaining windows in the scene continue to fill the main area; only the Primary may need promotion (step 1 covers this).
 
-Additional safety: every 30 s, a "reconciliation pass" walks `Parked` and `ActiveHwndByDevice`, checks `IsWindow(hwnd)`, purges dead entries that somehow escaped the event. Defense in depth.
+Additional safety: every 30 s, a "reconciliation pass" walks every `Scene` in `ScenesByDevice` and the per-device `ActiveSceneByDevice`, checks `IsWindow(hwnd)` for each member, purges dead entries that somehow escaped the event, and prunes empty scenes. Defense in depth.
+
+**Desktop-icons reconciliation hook (Plan 04 §Design.15 callback).** On startup, if the snapshot file exists (a prior run crashed) AND `Behavior.HideDesktopIconsWhenStageActive == true` in the current settings, call `IDesktopIconToggle.Toggle(true)` once before any other recovery work. This ensures the user's desktop icons are restored even if the prior crash left them hidden. The call is idempotent (already-visible icons stay visible), so it is safe to run unconditionally on a settings-on path.
 
 ### 10. DRM-content documentation
 
@@ -407,25 +421,43 @@ No telemetry, no network. But a local crash report helps diagnose issues users c
 
 > Add `app.manifest` with `PerMonitorV2` per Plan 05 §Design.7. Verify the overlay responds to `WM_DPICHANGED`. Add two layout-engine tests at 150 % and 200 % scale.
 
-### S8 — UWP cloak polling
+### S8 — UWP cloak polling + bitmap-fallback responder
 
-**Files**: `app/src/App.Core/Windows/CloakStateMonitor.cs`.
+**Files**:
 
-**Tests**: `CloakStateMonitorTests` with fake `INativeWindowApi`; simulates cloak/uncloak transitions.
+- `app/src/App.Core/Windows/CloakStateMonitor.cs` (poll loop + events).
+- `app/src/App.Services/Stage/CloakResponder.cs` (new) — listens to `CloakStateMonitor`, swaps `IThumbnailSource` between DWM and bitmap on the affected `SidebarOverlay` tile.
+- `app/src/App.Core/Stage/ParkTimeSnapshotCache.cs` (new) — `Dictionary<WindowIdentity, ThumbnailSnapshot>` populated by `StageController.EnableAsync` step 9 via `IThumbnailSourceFactory.Capture` (Plan 02 §Design.6).
 
-**Claude Code prompt**:
+**Tests**:
 
-> Implement `CloakStateMonitor` per Plan 05 §Design.8. Polls every 2 s. Fires `Uncloaked` / `Cloaked` events; `StageController` subscribes to add/remove from stage. Unit-test transitions.
-
-### S9 — Orphan cleanup reconciliation pass
-
-**Files**: extend `StageController` with `ReconciliationTimer` (a `PeriodicTimer` running every 30 s).
-
-**Tests**: `StageControllerTests` — add 2 cases: dead parked HWND purged; dead active HWND replaced by next parked on the same monitor.
+- `CloakStateMonitorTests` with fake `INativeWindowApi`: simulates cloak/uncloak transitions; verifies events fire once per transition (no spurious repeats); verifies the 2 s polling cadence is honoured.
+- `CloakResponderTests` with fake `IStageOverlayHost`, fake `IThumbnailSourceFactory`, and a pre-populated `ParkTimeSnapshotCache`: cloak event triggers DWM-source dispose + bitmap-source register against the cached snapshot; uncloak event reverses; if the cache has no snapshot for an HWND (e.g. a window that was uncloaked at enable time), the responder logs Warning and leaves the existing source in place.
+- `EnableAsyncCaptureTests` (extension of Plan 03's `StageControllerTests`): `EnableAsync` calls `IThumbnailSourceFactory.Capture` once per parked window; the result is stored in the cache; the cache is cleared on `DisableAsync`.
 
 **Claude Code prompt**:
 
-> Add the reconciliation pass to `StageController` per Plan 05 §Design.9. Runs every 30 s while Enabled. Add two unit tests covering the cleanup of dead HWNDs.
+> Implement `CloakStateMonitor`, `CloakResponder`, and `ParkTimeSnapshotCache` per Plan 05 §Design.8. The monitor polls every 2 s and fires `Cloaked` / `Uncloaked` events. The responder consumes those events and the snapshot cache to swap thumbnail sources via `IThumbnailSourceFactory` (Plan 02 §Design.6). Extend `StageController.EnableAsync` step 9 to call `IThumbnailSourceFactory.Capture` once per parked window and feed the result into the cache. Cover with the three test classes listed.
+
+### S9 — Orphan cleanup reconciliation pass + desktop-icons recovery
+
+**Files**:
+
+- Extend `StageController` with `ReconciliationTimer` (a `PeriodicTimer` running every 30 s).
+- Extend the startup-recovery flow (`CrashRecoveryCoordinator`, Plan 03 §S7) with a `RestoreDesktopIconsIfNeeded` pre-step that runs before the user-facing balloon prompt.
+
+**Tests**: `StageControllerTests` — add 4 cases:
+
+- Dead member of a multi-window scene purged; scene's `Windows.Count` drops by 1; if the dead HWND was the Primary, next member promoted.
+- Dead member of a single-window scene → entire scene removed from `ScenesByDevice`.
+- Dead active scene's Primary, scene becomes empty → next parked scene on the same monitor activated and resized to main area.
+- All scenes on a monitor become empty → `ActiveSceneByDevice[device] = null`, main area shows wallpaper.
+
+Plus `CrashRecoveryCoordinatorTests`: when a stale snapshot exists AND `HideDesktopIconsWhenStageActive == true`, `RestoreDesktopIconsIfNeeded` calls `IDesktopIconToggle.Toggle(true)` once before showing the balloon. When the setting is off, it is not called.
+
+**Claude Code prompt**:
+
+> Extend the reconciliation pass per Plan 05 §Design.9 to operate on the scene-shaped `StageState` (Plan 03 §Design.1a). Runs every 30 s while Enabled. Add the four scene-aware test cases. Also add the `RestoreDesktopIconsIfNeeded` pre-step to `CrashRecoveryCoordinator` and unit-test it.
 
 ### S10 — Elevation-boundary UX
 
@@ -487,6 +519,9 @@ No telemetry, no network. But a local crash report helps diagnose issues users c
 12. Uninstall via Add/Remove Programs; verify `%APPDATA%\Stagehand\` preserved; autostart `.lnk` removed.
 13. Review `sbom.xml` attached to the release; spot-check 3 transitive deps are listed.
 14. `winget install Stagehand.Stagehand` on a fresh VM; verify successful install and launch.
+15. **Bitmap fallback on cloak.** Park Calculator (UWP). Minimise it to the system tray (cloak). Within 2 s, sidebar tile shows the cached bitmap snapshot, not a black thumbnail.
+16. **Scene-shaped snapshot.** Open 2 Notepads + 3 Edge tabs (separate windows). Enable. Force-kill. Restart. Balloon prompt names "2 stages with 5 windows". Click Restore; all 5 windows reappear at pre-enable positions.
+17. **Desktop-icons reconciliation.** Enable with `HideDesktopIconsWhenStageActive = true`. Force-kill. Restart. Icons visible before any prompt.
 
 **Claude Code prompt**:
 

@@ -142,12 +142,31 @@ public sealed class WindowController : IWindowController
     {
         _ui.AssertOnUiThread();
 
+        // No NoRedraw on restore: Plan 02 §Design.4 originally specified the
+        // same flags as Park, but the symmetry was wrong. Park hides, Restore
+        // must show — and a `SetWindowPos` without a redraw burst on a
+        // previously off-screen window leaves the destination region
+        // un-painted on real machines (observed with WhatsApp Desktop and
+        // other UWP apps). The Plan-02 markdown has been updated to match.
         SetWindowPosOrThrow(
             hwnd,
             original,
-            SetWindowPosFlags.NoZOrder | SetWindowPosFlags.NoActivate | SetWindowPosFlags.NoRedraw,
+            SetWindowPosFlags.NoZOrder | SetWindowPosFlags.NoActivate,
             nameof(RestorePosition)
         );
+
+        // UWP / minimize-to-tray apps frequently set DWMWA_CLOAKED while
+        // parked off-screen — the cloak bit is independent of the window
+        // rect, so SetWindowPos alone leaves the window invisible to DWM
+        // even though its bounds are now on-screen. ShowWindow with
+        // SW_SHOWNA (= show without activation) clears the cloak without
+        // stealing focus from whatever the user is currently doing. The
+        // call is a no-op for non-cloaked windows.
+        if (_api.IsCloaked(hwnd))
+        {
+            _ = _api.ShowWindow(hwnd, NativeMethods.SW_SHOWNA);
+        }
+
         LogRestored(_log, hwnd, original.X, original.Y, original.Width, original.Height, null);
     }
 

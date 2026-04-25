@@ -215,13 +215,7 @@ public sealed class WinEventHookThread(ILogger<WinEventHookThread> log) : IDispo
             // message and the pump never wakes up, so InvokeAsync hangs.
             // PeekMessage is documented to allocate the queue on first call.
             _threadId = NativeMethods.GetCurrentThreadId();
-            _ = NativeMethods.PeekMessage(
-                out _,
-                IntPtr.Zero,
-                0,
-                0,
-                NativeMethods.PM_NOREMOVE
-            );
+            _ = NativeMethods.PeekMessage(out _, IntPtr.Zero, 0, 0, NativeMethods.PM_NOREMOVE);
             _threadReady.Set();
 
             s_logThreadStarted(_log, null);

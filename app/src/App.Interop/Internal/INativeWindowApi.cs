@@ -173,6 +173,22 @@ internal interface INativeWindowApi
     uint GetWindowThreadProcessId(IntPtr hwnd, out int processId);
 
     /// <summary>
+    /// Calls <c>ShowWindow</c> with the supplied <paramref name="nCmdShow"/>
+    /// command (e.g. <c>SW_SHOWNA</c> to assert <c>WS_VISIBLE</c> without
+    /// stealing focus). Used by <c>WindowController.RestorePosition</c> to
+    /// recover UWP windows that DWM cloaked while parked off-screen — those
+    /// stay invisible after a plain <c>SetWindowPos</c> back to the original
+    /// rect because the cloak bit is independent of the window rect.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> if the window was previously visible,
+    /// <see langword="false"/> if previously hidden. Stagehand does not act on
+    /// the prior state today, but the bool surface mirrors the Win32 contract
+    /// for symmetry with other seam methods.
+    /// </returns>
+    bool ShowWindow(IntPtr hwnd, int nCmdShow);
+
+    /// <summary>
     /// Attaches or detaches the input-processing mechanism of two threads.
     /// Used by <c>WindowController.BringToFront</c> to side-step the
     /// foreground-lock timeout.

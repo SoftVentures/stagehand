@@ -500,6 +500,46 @@ internal static partial class NativeMethods
     // ---------------------------------------------------------------------
 
     // ---------------------------------------------------------------------
+    // Visibility / show-state
+    // ---------------------------------------------------------------------
+
+    // consumer: plan 02 §WindowController.RestorePosition (UWP cloak recovery)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-showwindow"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    // ---------------------------------------------------------------------
+    // Bitmap capture (PrintWindow / device contexts)
+    // ---------------------------------------------------------------------
+
+    // PrintWindow nFlags — see
+    // <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-printwindow"/>
+    // PW_CLIENTONLY restricts capture to the client area; we want full window chrome.
+    internal const uint PW_CLIENTONLY = 0x00000001;
+
+    // PW_RENDERFULLCONTENT (Windows 8.1+) instructs DWM to also render
+    // hardware-accelerated content (Chromium/WPF/WinUI). Without it those
+    // surfaces capture as transparent or solid black.
+    internal const uint PW_RENDERFULLCONTENT = 0x00000002;
+
+    // consumer: plan 02 §BitmapThumbnailSource (capture path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-printwindow"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    // consumer: plan 02 §BitmapThumbnailSource (capture path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdc"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial IntPtr GetDC(IntPtr hWnd);
+
+    // consumer: plan 02 §BitmapThumbnailSource (capture path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-releasedc"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    // ---------------------------------------------------------------------
     // Resource counters (GDI / user objects) — harness diagnostic
     // ---------------------------------------------------------------------
 

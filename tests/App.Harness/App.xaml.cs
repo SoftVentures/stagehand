@@ -221,6 +221,7 @@ public partial class HarnessApp : Application
         services.AddSingleton<IWindowFilter, WindowFilter>();
         services.AddSingleton<IManageableWindowService, ManageableWindowService>();
         services.AddSingleton<IDwmThumbnailFactory, DwmThumbnailFactory>();
+        services.AddSingleton<IBitmapThumbnailFactory, BitmapThumbnailFactory>();
         services.AddSingleton<IThumbnailLayoutEngine, ThumbnailLayoutEngine>();
         services.AddSingleton<WinEventHookThread>();
         services.AddSingleton<IWinEventHookFactory, WinEventHookFactory>();

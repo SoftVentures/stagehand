@@ -49,6 +49,7 @@ No StageController yet; Plan 03 composes these pieces into the enable/disable fl
 8. `ThumbnailLayoutEngine` is a pure function covered by ≥10 unit tests (single window, many windows, sidebar on left vs. right, tall vs. wide thumbnails, aspect-ratio preservation, empty list, single monitor, two monitors with different DPI).
 9. No behavioural regression to Plan 01: CI still green, no new warnings, no new exceptions surfaced to the UI.
 10. A manual-test checklist is written to `docs/manual-tests/plan-02.md`.
+11. **`IThumbnailSource` abstraction works for both live DWM thumbnails and bitmap fallbacks.** Registering a `BitmapThumbnailSource` from a `PrintWindow`-captured snapshot renders a static thumbnail in the sidebar that survives the source window being minimised or cloaked. Plan 05 wires this into the cloak detector; Plan 02 ships the abstraction and the snapshot capture path.
 
 ---
 
@@ -59,7 +60,9 @@ No StageController yet; Plan 03 composes these pieces into the enable/disable fl
 - `WindowEnumerator` + filter rules.
 - `WindowController` (Park, Restore, Resize, BringToFront — including `AttachThreadInput` fallback).
 - `WinEventHook` + `WinEventHookThread` (the STA thread Plan 01 stubbed).
-- `DwmThumbnail` wrapper + `DwmThumbnailFactory`.
+- `IThumbnailSource` abstraction with two implementations:
+  - `DwmThumbnailSource` (live, primary path) — `DwmThumbnail` wrapper + `DwmThumbnailFactory`.
+  - `BitmapThumbnailSource` (static fallback) — `PrintWindow`-captured snapshot for windows where the DWM thumbnail is unusable (minimised, cloaked, DRM-protected).
 - `ThumbnailLayoutEngine` (pure geometry).
 - `SidebarOverlay` WPF window (appearance + positioning; interactions come in Plan 03).
 - `INativeWindowApi` seam to keep Core/Services tests away from Win32.
@@ -191,7 +194,9 @@ public sealed class WindowController : IWindowController
 Rules:
 
 - All four methods assert they are called on the UI thread (`UiDispatcher.AssertOnUiThread` in Debug).
-- `Park` uses flags `SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW`. Same for `RestorePosition`. Z-order and focus are left to `BringToFront`.
+- `Park` uses flags `SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW` — the parked window is immediately invisible, so suppressing the redraw burst is correct.
+- `RestorePosition` uses `SWP_NOZORDER | SWP_NOACTIVATE` (no `NOREDRAW`). Z-order and focus are still left to `BringToFront`, but the redraw burst is required: a `SetWindowPos` move from the off-screen park slot back to the original on-screen rect leaves the destination region un-painted on real hardware otherwise. The original Plan-01 sketch had `RestorePosition` mirror `Park`'s flags for symmetry; manual testing with WhatsApp Desktop and other UWP/MSIX apps showed that symmetry was wrong, so `NOREDRAW` is dropped here.
+- `RestorePosition` also calls `ShowWindow(hwnd, SW_SHOWNA)` _iff_ `IsCloaked(hwnd)` returns `true`. UWP and minimize-to-tray apps frequently set `DWMWA_CLOAKED` while parked off-screen; the cloak bit is independent of the window rect, so `SetWindowPos` alone leaves the window invisible to DWM even after the bounds are on-screen again. `SW_SHOWNA` (= show without activation) clears the cloak without stealing focus, preserving the "no Z-order, no activation" discipline of the surrounding flow. The check is skipped for non-cloaked windows so we never toggle visibility on apps that intentionally hid themselves.
 - `Resize` uses `SWP_NOZORDER | SWP_NOACTIVATE` (no `NOREDRAW`; the app should repaint at the new size).
 - `BringToFront` implements the standard `AttachThreadInput` workaround:
 
@@ -251,14 +256,45 @@ public sealed record WinEventArgs(uint EventId, IntPtr Hwnd, int ObjectId, int C
 
 **Explorer restart.** We register for `TaskbarCreated` (a broadcast message) on the hook thread and re-install all currently-active hooks on receipt.
 
-### 6. `DwmThumbnail` wrapper and factory
+### 6. Thumbnail source abstraction (`IThumbnailSource`) and DWM/bitmap implementations
+
+The sidebar can render a window's miniature in one of two ways:
+
+1. A **live DWM thumbnail** — DWM streams the source window's surface into a destination rect on the overlay HWND. Cheap, real-time, no per-frame work in our process. Fails for cloaked or minimised windows (returns a black surface) and for DRM-protected content (also black, by Windows policy).
+2. A **static bitmap snapshot** — captured once at park time via `PrintWindow` (with `PW_RENDERFULLCONTENT`) and rendered as a `WriteableBitmap` overlay. Independent of the source window's visibility state, but does not update when the source repaints.
+
+Plan 02 ships both behind one interface so `SidebarOverlay.Sync` and `ThumbnailLayoutEngine` are oblivious to the source kind. Plan 05's `CloakStateMonitor` chooses which implementation to wire per parked window. In Plan 02, the only consumer is the harness, which renders DWM by default; a harness toggle exercises the bitmap path.
 
 ```csharp
-public sealed class DwmThumbnail : IDisposable
+public interface IThumbnailSource : IDisposable
+{
+    IntPtr Source { get; }
+    Size SourceSize { get; }
+    void Attach(IntPtr destinationHwnd);     // bind to an overlay HWND (idempotent re-attach allowed)
+    void UpdateDestinationRect(Rect destRect, byte opacity = 255);
+}
+
+public interface IThumbnailSourceFactory
+{
+    IThumbnailSource RegisterDwm(IntPtr sourceHwnd, IntPtr destinationHwnd);
+    IThumbnailSource RegisterBitmap(IntPtr sourceHwnd, IntPtr destinationHwnd, ThumbnailSnapshot snapshot);
+    ThumbnailSnapshot Capture(IntPtr sourceHwnd);   // PrintWindow-based; safe to call on minimised windows
+}
+
+public sealed record ThumbnailSnapshot(Size SourceSize, byte[] Bgra32Pixels, int Stride);
+```
+
+The destination HWND is the sidebar overlay in both cases; DWM draws directly into the overlay's window surface, the bitmap path uses a per-thumbnail child `HwndHost`/`Image` placed at the same destination rect. `SidebarOverlay` does not care which is live.
+
+#### 6a. DWM implementation — `DwmThumbnail`
+
+```csharp
+public sealed class DwmThumbnail : IThumbnailSource
 {
     public IntPtr Source { get; }
     public IntPtr Destination { get; }
     public Size SourceSize { get; }
+    public void Attach(IntPtr destinationHwnd);
     public void UpdateDestinationRect(Rect destRect, byte opacity = 255);
     public void SetSourceCrop(Rect? cropInSourcePixels);
     public void Dispose();
@@ -279,6 +315,39 @@ Implementation notes:
 - All methods assert UI-thread affinity.
 
 Destination HWND: the sidebar overlay. DWM draws the thumbnail directly into the overlay's window surface; we do **not** render thumbnail pixels in WPF.
+
+#### 6b. Bitmap implementation — `BitmapThumbnailSource`
+
+```csharp
+public sealed class BitmapThumbnailSource : IThumbnailSource
+{
+    public IntPtr Source { get; }
+    public Size SourceSize { get; }
+    public void Attach(IntPtr destinationHwnd);
+    public void UpdateDestinationRect(Rect destRect, byte opacity = 255);
+    public void Dispose();
+}
+```
+
+Capture pipeline (`IThumbnailSourceFactory.Capture`):
+
+1. `GetWindowRect(hwnd)` → source size. If width or height ≤ 0 (window is fully off-screen because of an in-flight park), use the last cached non-degenerate rect for that identity from a small sliding cache; else log Debug and skip capture (caller falls back to live DWM).
+2. `BeginPaint`-free path: `GetDC(hwnd)` then `CreateCompatibleDC`, `CreateCompatibleBitmap` for the full window rect.
+3. `PrintWindow(hwnd, hdcMem, PW_RENDERFULLCONTENT)` (`0x00000002`). `PW_RENDERFULLCONTENT` is required for Chromium / Edge / WPF / WinUI windows that otherwise render blank — documented in MSDN as Windows 8.1+ behaviour.
+4. `GetDIBits` into a 32 bpp BGRA byte buffer; wrap in a `ThumbnailSnapshot` record.
+5. Release GDI: `DeleteObject(hbitmap)`, `DeleteDC(hdcMem)`, `ReleaseDC(hwnd, hdcWindow)`. All wrapped in `SafeHandle` types — same discipline as Plan 01's `DwmThumbnailSafeHandle`.
+
+Render pipeline (`UpdateDestinationRect`):
+
+- The bitmap is rendered into a per-thumbnail child `HwndHost`-hosted `Image` element placed at the destination rect inside the overlay. Unlike DWM's direct surface composition, this path does go through WPF's render thread, but the per-frame work is just one `ImageSource` re-positioning — sub-millisecond at the thumbnail counts we expect.
+- Opacity multiplied into the WPF element's `Opacity` (no per-pixel alpha rebuild).
+
+Limitations (documented in Settings → About via Plan 05):
+
+- Snapshot is frozen at park time; minimised app's content does not update. This is the deliberate trade-off — DWM gives us liveness, bitmap gives us availability.
+- `PrintWindow` on hardware-accelerated DirectX swap chains (some games, video apps) returns black. Acceptable: the live DWM path also returns black for those, and the cloak/DRM cases this fallback exists for are typically GDI/Chromium content where `PW_RENDERFULLCONTENT` succeeds.
+
+The factory's `Capture` is also exposed standalone so future code paths (e.g. a "frozen preview while a window is being moved" optimisation) can capture without registering a source.
 
 ### 7. `ThumbnailLayoutEngine`
 
@@ -475,17 +544,27 @@ public sealed class WindowFilter : IWindowFilter
 
 > Implement `WinEventHookThread` (a manual message-pump STA thread) and `WinEventHook` per Plan 02 §Design.5. The hook callback must never touch UI state directly; marshal via `UiDispatcher.Post`. Implement the coalescing ring buffer PER INSTANCE. Honor `IdProcess` and `IdThread` by passing them to `SetWinEventHook`. `Dispose` must be safe to call after `WinEventHookThread` has stopped — catch the expected exception and log Warning. Write the seven test scenarios listed.
 
-### S6 — `DwmThumbnail` + factory
+### S6 — `IThumbnailSource` abstraction with DWM and Bitmap implementations
 
-**Files**: `app/src/App.Interop/DwmThumbnail.cs`, `DwmThumbnailFactory.cs`.
+**Files**:
 
-**API**: §Design.6.
+- `app/src/App.Interop/Thumbnails/IThumbnailSource.cs`, `IThumbnailSourceFactory.cs`, `ThumbnailSnapshot.cs`
+- `app/src/App.Interop/Thumbnails/DwmThumbnail.cs`, `DwmThumbnailFactory.cs` (DWM path)
+- `app/src/App.Interop/Thumbnails/BitmapThumbnailSource.cs`, `BitmapThumbnailFactory.cs` (bitmap path)
+- `app/src/App.Interop/Thumbnails/ThumbnailSourceFactory.cs` (composite — chooses between the two on `Register*` and routes `Capture` calls).
 
-**Tests**: the wrapper itself is too thin to unit-test meaningfully; coverage comes from the harness. However, add `DwmThumbnailLifecycleTests` that register + dispose 1000 times with a fake `NativeDwmApi` seam and verify exactly one `Register` / `Unregister` pair per instance.
+**API**: §Design.6, §6a, §6b.
+
+**Tests**:
+
+- `DwmThumbnailLifecycleTests` (existing scope) — register + dispose 1000 times with a fake `INativeDwmApi`; assert exactly one `Register` / `Unregister` pair per instance.
+- `BitmapThumbnailFactoryTests` — capture against a fake `INativeWindowApi` returning a scripted bitmap; verify GDI handles released; verify `Capture` is no-op on degenerate (off-screen / size 0) windows; verify `PW_RENDERFULLCONTENT` flag is passed to `PrintWindow`.
+- `ThumbnailSourceFactoryTests` — verify factory routes `RegisterDwm` / `RegisterBitmap` to the right concrete factory; verify `Dispose` releases all underlying resources.
+- `BitmapThumbnailSourceRenderTests` — pure WPF placement test; the `HwndHost`/`Image` ends up at the requested destination rect with the requested opacity.
 
 **Claude Code prompt**:
 
-> Implement `DwmThumbnail` and `DwmThumbnailFactory` per Plan 02 §Design.6. Introduce an internal `INativeDwmApi` seam mirroring the `INativeWindowApi` pattern so the factory is testable without real DWM. Write the lifecycle test described.
+> Implement the `IThumbnailSource` abstraction per Plan 02 §Design.6 with both `DwmThumbnail` (live) and `BitmapThumbnailSource` (static snapshot) implementations. Introduce internal `INativeDwmApi` and extend `INativeWindowApi` with `PrintWindow` + `GetDIBits` + `CreateCompatibleDC`/`CreateCompatibleBitmap` so both factories are testable without real Win32. Write the four test classes listed. The capture path uses `PrintWindow` with `PW_RENDERFULLCONTENT` (0x2). Plan 05 §S8 (Cloak detector) consumes this abstraction to fall back to bitmap when a parked window is cloaked.
 
 ### S7 — `ThumbnailLayoutEngine`
 
@@ -591,5 +670,7 @@ public sealed class WindowFilter : IWindowFilter
 - `DwmRegisterThumbnail` — <https://learn.microsoft.com/windows/win32/api/dwmapi/nf-dwmapi-dwmregisterthumbnail>
 - `DwmUpdateThumbnailProperties` — <https://learn.microsoft.com/windows/win32/api/dwmapi/nf-dwmapi-dwmupdatethumbnailproperties>
 - `DwmGetWindowAttribute` (DWMWA_CLOAKED) — <https://learn.microsoft.com/windows/win32/api/dwmapi/nf-dwmapi-dwmgetwindowattribute>
+- `PrintWindow` (with `PW_RENDERFULLCONTENT`) — <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-printwindow>
+- `GetDIBits` — <https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-getdibits>
 - `GetGuiResources` — <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getguiresources>
 - Explorer restart / `TaskbarCreated` — <https://learn.microsoft.com/windows/win32/shell/taskbar#taskbar-creation-notification>

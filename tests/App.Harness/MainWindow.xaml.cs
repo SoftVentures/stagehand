@@ -67,6 +67,13 @@ public partial class MainWindow : Window
             "Harness handler {Handler} threw."
         );
 
+    private static readonly Action<ILogger, IntPtr, int, Exception?> s_logKillFailed =
+        LoggerMessage.Define<IntPtr, int>(
+            LogLevel.Warning,
+            new EventId(6004, "HarnessKillFailed"),
+            "Kill failed for HWND 0x{Hwnd:X} (PID {ProcessId})."
+        );
+
     private readonly IServiceProvider _services;
     private readonly WindowListViewModel _viewModel;
     private readonly IWindowController _controller;
@@ -90,7 +97,9 @@ public partial class MainWindow : Window
         _services = services ?? throw new ArgumentNullException(nameof(services));
 
         _viewModel = new WindowListViewModel(
-            services.GetRequiredService<IManageableWindowService>()
+            services.GetRequiredService<IManageableWindowService>(),
+            services.GetRequiredService<IBitmapThumbnailFactory>(),
+            services.GetRequiredService<ILogger<WindowListViewModel>>()
         );
         _controller = services.GetRequiredService<IWindowController>();
         _hookFactory = services.GetRequiredService<IWinEventHookFactory>();
@@ -193,11 +202,12 @@ public partial class MainWindow : Window
             nameof(OnParkClicked),
             () =>
             {
-                if (WindowList.SelectedItem is not WindowSnapshot snap)
+                if (WindowList.SelectedItem is not WindowListItem item)
                 {
                     AppendHookLog("Park skipped — no selection.");
                     return;
                 }
+                WindowSnapshot snap = item.Snapshot;
 
                 // Cache the original bounds so "Restore" has somewhere to put it back.
                 _viewModel.ParkedOriginalBounds[snap.Hwnd] = snap.Bounds;
@@ -224,11 +234,12 @@ public partial class MainWindow : Window
             nameof(OnRestoreClicked),
             () =>
             {
-                if (WindowList.SelectedItem is not WindowSnapshot snap)
+                if (WindowList.SelectedItem is not WindowListItem item)
                 {
                     AppendHookLog("Restore skipped — no selection.");
                     return;
                 }
+                WindowSnapshot snap = item.Snapshot;
                 if (
                     !_viewModel.ParkedOriginalBounds.TryGetValue(snap.Hwnd, out Rect originalBounds)
                 )
@@ -247,6 +258,42 @@ public partial class MainWindow : Window
                 {
                     AppendHookLog($"Restore FAILED: {ex.GetType().Name}: {ex.Message}");
                     s_logRestoreFailed(_log, snap.Hwnd, ex);
+                }
+            }
+        );
+
+    private void OnKillClicked(object sender, RoutedEventArgs e) =>
+        SafeInvoke(
+            nameof(OnKillClicked),
+            () =>
+            {
+                if (WindowList.SelectedItem is not WindowListItem item)
+                {
+                    AppendHookLog("Kill skipped — no selection.");
+                    return;
+                }
+                WindowSnapshot snap = item.Snapshot;
+                int pid = snap.ProcessId;
+
+                try
+                {
+                    using Process proc = Process.GetProcessById(pid);
+                    proc.Kill(entireProcessTree: true);
+                    AppendHookLog($"Kill: hwnd=0x{snap.Hwnd:X} title='{snap.Title}' pid={pid}");
+                    // Drop any cached park bounds for the now-dead HWND so a
+                    // stale Restore click does not try to move it.
+                    _ = _viewModel.ParkedOriginalBounds.Remove(snap.Hwnd);
+                    // Refresh re-enumerates and re-captures previews so the
+                    // killed window vanishes from the list immediately. Keep
+                    // a single enumeration result and reuse it for the sidebar
+                    // sync so we don't pay the capture cost twice.
+                    IReadOnlyList<WindowSnapshot> after = _viewModel.Refresh();
+                    _sidebar?.Sync(after);
+                }
+                catch (Exception ex)
+                {
+                    AppendHookLog($"Kill FAILED: {ex.GetType().Name}: {ex.Message}");
+                    s_logKillFailed(_log, snap.Hwnd, pid, ex);
                 }
             }
         );
@@ -307,9 +354,10 @@ public partial class MainWindow : Window
             nameof(OnWindowSelectionChanged),
             () =>
             {
-                var hasSelection = WindowList.SelectedItem is WindowSnapshot;
+                var hasSelection = WindowList.SelectedItem is WindowListItem;
                 ParkButton.IsEnabled = hasSelection;
                 RestoreButton.IsEnabled = hasSelection;
+                KillButton.IsEnabled = hasSelection;
             }
         );
 

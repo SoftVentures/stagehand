@@ -224,6 +224,8 @@ internal sealed class NativeWindowApi : INativeWindowApi
 
     public bool SetForegroundWindow(IntPtr hwnd) => NativeMethods.SetForegroundWindow(hwnd);
 
+    public bool ShowWindow(IntPtr hwnd, int nCmdShow) => NativeMethods.ShowWindow(hwnd, nCmdShow);
+
     public IntPtr GetForegroundWindow() => NativeMethods.GetForegroundWindow();
 
     public uint GetCurrentThreadId() => NativeMethods.GetCurrentThreadId();

@@ -63,3 +63,6 @@ Desktop.ini
 # The source SVGs in app/assets/brand/ ARE committed; these derived files are not.
 app/src/App.Shell/Assets/TrayIcon*.ico
 app/src/App.Shell/Assets/WelcomeHero.png
+
+# Claude
+.claude/settings.*

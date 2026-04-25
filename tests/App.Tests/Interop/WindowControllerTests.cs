@@ -111,6 +111,10 @@ public sealed class WindowControllerTests
     [Fact]
     public void RestorePosition_UsesPassedRect()
     {
+        // Restore must NOT pass NoRedraw — without a redraw burst the target
+        // region stays un-painted on real hardware (UWP cloak bug repro,
+        // Plan 02 §Design.4 fix). The assertion checks both the bits that
+        // must be set and that NoRedraw is NOT set.
         (INativeWindowApi api, WindowController controller) = BuildController();
         api.SetWindowPos(Arg.Any<IntPtr>(), Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>())
             .Returns(true);
@@ -122,10 +126,46 @@ public sealed class WindowControllerTests
             .SetWindowPos(
                 TestHwnd,
                 Arg.Is<Rect>(r => r.X == 50 && r.Y == 60 && r.Width == 1024 && r.Height == 768),
-                SetWindowPosFlags.NoZOrder
-                    | SetWindowPosFlags.NoActivate
-                    | SetWindowPosFlags.NoRedraw
+                Arg.Is<SetWindowPosFlags>(f =>
+                    f == (SetWindowPosFlags.NoZOrder | SetWindowPosFlags.NoActivate)
+                )
             );
+    }
+
+    [Fact]
+    public void RestorePosition_WhenCloaked_CallsShowWindow_With_SW_SHOWNA()
+    {
+        // UWP / minimize-to-tray windows often have DWMWA_CLOAKED set after
+        // being parked off-screen. RestorePosition must clear the cloak via
+        // ShowWindow(SW_SHOWNA) — SW_SHOWNA is 8 and asserts visibility
+        // without stealing focus.
+        (INativeWindowApi api, WindowController controller) = BuildController();
+        api.SetWindowPos(Arg.Any<IntPtr>(), Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>())
+            .Returns(true);
+        api.IsCloaked(TestHwnd).Returns(true);
+        api.ShowWindow(Arg.Any<IntPtr>(), Arg.Any<int>()).Returns(false);
+
+        controller.RestorePosition(TestHwnd, new Rect(0, 0, 100, 100));
+
+        const int SwShowna = 8;
+        api.Received(1).ShowWindow(TestHwnd, SwShowna);
+    }
+
+    [Fact]
+    public void RestorePosition_WhenNotCloaked_DoesNotCallShowWindow()
+    {
+        // Normal Win32 windows (Notepad, Explorer, etc.) are not cloaked at
+        // park time. Avoid the redundant ShowWindow call so we don't
+        // accidentally toggle visibility on apps that intentionally hid
+        // themselves.
+        (INativeWindowApi api, WindowController controller) = BuildController();
+        api.SetWindowPos(Arg.Any<IntPtr>(), Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>())
+            .Returns(true);
+        api.IsCloaked(TestHwnd).Returns(false);
+
+        controller.RestorePosition(TestHwnd, new Rect(0, 0, 100, 100));
+
+        api.DidNotReceive().ShowWindow(Arg.Any<IntPtr>(), Arg.Any<int>());
     }
 
     // -------------------------------------------------------------------

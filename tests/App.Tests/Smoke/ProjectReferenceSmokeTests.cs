@@ -128,6 +128,24 @@ public sealed class ProjectReferenceSmokeTests
     }
 
     [Fact]
+    public void DI_Resolves_Real_BitmapThumbnailFactory()
+    {
+        using ServiceProvider sp = BuildMinimalProvider();
+        sp.GetRequiredService<IBitmapThumbnailFactory>()
+            .Should()
+            .BeOfType<BitmapThumbnailFactory>();
+    }
+
+    [Fact]
+    public void DI_Resolves_Real_ThumbnailSourceFactory()
+    {
+        using ServiceProvider sp = BuildMinimalProvider();
+        sp.GetRequiredService<IThumbnailSourceFactory>()
+            .Should()
+            .BeOfType<ThumbnailSourceFactory>();
+    }
+
+    [Fact]
     public void DI_Resolves_Real_ThumbnailLayoutEngine()
     {
         using ServiceProvider sp = BuildMinimalProvider();

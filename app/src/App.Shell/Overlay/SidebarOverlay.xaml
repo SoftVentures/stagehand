@@ -3,7 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     AllowsTransparency="True"
-    Background="#00000000"
+    Background="#01000000"
     ResizeMode="NoResize"
     ShowInTaskbar="False"
     Topmost="True"
@@ -13,8 +13,18 @@
         tree needed. A 1px edge accent is drawn for debuggability and is
         removed in Plan 04 polish (§Design.8).
     -->
-    <Border
-        x:Name="EdgeAccent"
-        BorderBrush="#88FFFFFF"
-        BorderThickness="1,0,0,0" />
+    <Grid IsHitTestVisible="False">
+        <Border
+            x:Name="EdgeAccent"
+            BorderBrush="#88FFFFFF"
+            BorderThickness="1,0,0,0" />
+        <Canvas x:Name="HoverLayer">
+            <Border
+                x:Name="HoverHighlight"
+                BorderBrush="#CCFFFFFF"
+                BorderThickness="2"
+                CornerRadius="4"
+                Visibility="Collapsed" />
+        </Canvas>
+    </Grid>
 </Window>

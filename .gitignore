@@ -66,3 +66,4 @@ app/src/App.Shell/Assets/WelcomeHero.png
 
 # Claude
 .claude/settings.*
+.screenshots

@@ -19,6 +19,12 @@ using System.Runtime.InteropServices;
 // "all P/Invoke lives in App.Interop" convention from app/CLAUDE.md.
 [assembly: InternalsVisibleTo("App.Shell")]
 
+// Plan 03 §S8 HotkeyService and Plan 03 §S6 SnapshotStore call selected
+// NativeMethods entry points (RegisterHotKey / WM_HOTKEY constants) and
+// MessageOnlyWindow's wrapper. Same rationale as App.Shell above —
+// duplicating the P/Invokes in App.Services would violate the layer rule.
+[assembly: InternalsVisibleTo("App.Services")]
+
 // Plan 02 §S9 harness calls GetGuiResources (and a few other diagnostic
 // helpers) directly for the GDI/user-object soak test. Exposing a narrow
 // public API for a test-only surface would bloat the App.Interop contract;

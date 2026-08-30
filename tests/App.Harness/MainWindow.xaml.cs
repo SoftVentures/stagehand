@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using App.Core.Stage;
 using App.Interop;
 using App.Services.Windows;
 using App.Shell.Overlay;
@@ -333,6 +334,73 @@ public partial class MainWindow : Window
                 AppendHookLog("Hook registered (FOREGROUND + CREATE/DESTROY).");
             }
         );
+
+    private async void OnEnableStageClicked(object sender, RoutedEventArgs e)
+    {
+        HarnessTrace.Write("OnEnableStageClicked: entry");
+        try
+        {
+            IStageController stage = _services.GetRequiredService<IStageController>();
+            HarnessTrace.Write($"OnEnableStageClicked: phase={stage.CurrentState.Phase}");
+            AppendHookLog($"Enable Stage… (phase={stage.CurrentState.Phase})");
+            HarnessTrace.Write("OnEnableStageClicked: awaiting EnableAsync");
+            await stage.EnableAsync(System.Threading.CancellationToken.None).ConfigureAwait(true);
+            HarnessTrace.Write($"OnEnableStageClicked: returned, phase={stage.CurrentState.Phase}");
+            AppendHookLog($"Stage enabled. Phase={stage.CurrentState.Phase}");
+        }
+        catch (Exception ex)
+        {
+            HarnessTrace.Write(
+                $"OnEnableStageClicked: THREW {ex.GetType().Name}: {ex.Message}\n{ex}"
+            );
+            AppendHookLog($"Enable FAILED: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private async void OnDisableStageClicked(object sender, RoutedEventArgs e)
+    {
+        HarnessTrace.Write("OnDisableStageClicked: entry");
+        try
+        {
+            IStageController stage = _services.GetRequiredService<IStageController>();
+            HarnessTrace.Write($"OnDisableStageClicked: phase={stage.CurrentState.Phase}");
+            AppendHookLog($"Disable Stage… (phase={stage.CurrentState.Phase})");
+            HarnessTrace.Write("OnDisableStageClicked: awaiting DisableAsync");
+            await stage.DisableAsync(System.Threading.CancellationToken.None).ConfigureAwait(true);
+            HarnessTrace.Write(
+                $"OnDisableStageClicked: returned, phase={stage.CurrentState.Phase}"
+            );
+            AppendHookLog($"Stage disabled. Phase={stage.CurrentState.Phase}");
+        }
+        catch (Exception ex)
+        {
+            HarnessTrace.Write(
+                $"OnDisableStageClicked: THREW {ex.GetType().Name}: {ex.Message}\n{ex}"
+            );
+            AppendHookLog($"Disable FAILED: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void SafeInvoke(string handler, Func<Task> asyncAction) =>
+        SafeInvoke(handler, () => _ = SafeAsync(handler, asyncAction));
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Harness handler isolation; same rationale as the synchronous SafeInvoke."
+    )]
+    private async Task SafeAsync(string handler, Func<Task> asyncAction)
+    {
+        try
+        {
+            await asyncAction().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            AppendHookLog($"ERROR in {handler}: {ex.GetType().Name}: {ex.Message}");
+            s_logHandlerFault(_log, handler, ex);
+        }
+    }
 
     private void OnHookFired(string tag, WinEventArgs args) =>
         SafeInvoke(

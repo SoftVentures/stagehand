@@ -97,7 +97,11 @@ public sealed class WindowEnumerator : IWindowEnumerator
             var style = _api.GetWindowStyle(hwnd);
             var exStyle = _api.GetWindowExStyle(hwnd);
             var hasOwner = _api.GetWindowOwner(hwnd) != IntPtr.Zero;
-            Rect bounds = _api.GetWindowRect(hwnd);
+            // For minimised windows GetWindowRect returns the off-screen
+            // iconic position (typically (-32000,-32000,…)). Use the restored
+            // (rcNormalPosition) rect instead so layout, snapshot, and the
+            // RestorePosition path on Disable all see meaningful bounds.
+            Rect bounds = _api.GetRestoredBounds(hwnd);
             var processId = _api.GetProcessId(hwnd);
             var processStart = _api.GetProcessStartTimeUtcTicks(processId);
             var monitor = _api.MonitorFromWindow(hwnd);

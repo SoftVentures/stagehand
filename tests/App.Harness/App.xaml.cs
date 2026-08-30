@@ -11,7 +11,9 @@ using App.Interop;
 using App.Interop.Threading;
 using App.Services.Settings;
 using App.Services.Windows;
+using App.Shell.Interaction;
 using App.Shell.Overlay;
+using App.Shell.Recovery;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
@@ -65,6 +67,24 @@ public partial class HarnessApp : Application
             "Unhandled exception from {Source}."
         );
 
+    private static readonly Action<ILogger, Exception?> s_logCleanupOnExit = LoggerMessage.Define(
+        LogLevel.Information,
+        new EventId(3, "HarnessCleanupOnExit"),
+        "Harness exiting with Stage still enabled — running DisableAsync to restore desktop."
+    );
+
+    private static readonly Action<ILogger, Exception?> s_logCleanupFailed = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(4, "HarnessCleanupFailed"),
+        "DisableAsync on harness exit threw — desktop may need manual rescue (./scripts/rescue.ps1)."
+    );
+
+    private static readonly Action<ILogger, Exception?> s_logRecoveryFailed = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(5, "HarnessRecoveryFailed"),
+        "CrashRecoveryCoordinator on harness startup threw — old snapshot may still need manual rescue."
+    );
+
     private ServiceProvider? _services;
     private ILogger<HarnessApp>? _log;
 
@@ -96,6 +116,10 @@ public partial class HarnessApp : Application
         // additional window — the existing shell receives stdout.
         _ = AllocConsole();
 
+        // Truncate the previous-session trace so each launch starts fresh.
+        HarnessTrace.Reset();
+        HarnessTrace.Write("HarnessApp.OnStartup begin");
+
         var services = new ServiceCollection();
         ConfigureHarness(services);
 
@@ -126,6 +150,46 @@ public partial class HarnessApp : Application
             args.SetObserved();
         };
 
+        // First-chance exceptions: capture EVERY exception thrown anywhere in
+        // the process, even before any catch sees it. Routed through the
+        // synchronous trace-file helper (Serilog's file sink may buffer
+        // across a crash; the trace helper does not). Diagnoses crash paths
+        // where Park / Resize / DWM throws and the process dies before
+        // logging.
+        AppDomain.CurrentDomain.FirstChanceException += (_, args) =>
+            HarnessTrace.Write(
+                $"[FirstChance] {args.Exception.GetType().Name}: {args.Exception.Message}"
+            );
+
+        // Hard-kill safety net: if the dotnet host gets SIGINT (Ctrl+C in the
+        // launching terminal) AppDomain.ProcessExit fires before the WPF
+        // OnExit chain. Run the same Stage cleanup so desktop state is
+        // restored even on a non-graceful shutdown. Hard-kills via Task
+        // Manager bypass this entirely — that's what the snapshot + crash
+        // recovery on next start covers.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => RunStageCleanup();
+
+        // Crash recovery from the previous run (snapshot left on disk because
+        // the prior process didn't get to call DisableAsync). Synchronous
+        // wait — the harness window only opens after the desktop is sane.
+        try
+        {
+            CrashRecoveryCoordinator coordinator =
+                _services.GetRequiredService<CrashRecoveryCoordinator>();
+            coordinator.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+#pragma warning disable CA1031
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            s_logRecoveryFailed(_log, ex);
+        }
+
+        // Wire up sidebar click + Alt-Tab swap path. Must happen before the
+        // first Enable so the SceneClicked subscription is in place when the
+        // overlay starts raising events.
+        _services.GetRequiredService<StageInteractionCoordinator>().Start();
+
         s_logStarted(_log, null);
     }
 
@@ -133,8 +197,46 @@ public partial class HarnessApp : Application
     protected override void OnExit(ExitEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);
+        RunStageCleanup();
         _services?.Dispose();
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Runs <c>DisableAsync</c> synchronously if Stage is still enabled.
+    /// Idempotent and safe to call multiple times — DisableAsync's first
+    /// step is "if phase != Enabled return". Used by both the WPF
+    /// <see cref="OnExit"/> hook and <c>AppDomain.ProcessExit</c>; whichever
+    /// fires first wins, the second sees Disabled and is a no-op.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Cleanup-on-exit must never throw — log and move on; the user can rescue manually."
+    )]
+    private void RunStageCleanup()
+    {
+        if (_services is null || _log is null)
+        {
+            return;
+        }
+        try
+        {
+            IStageController stage = _services.GetRequiredService<IStageController>();
+            if (!stage.IsEnabled)
+            {
+                return;
+            }
+            s_logCleanupOnExit(_log, null);
+            // Synchronous wait — we're on the dispatcher exit path with no
+            // pumping options. Up to 10 seconds, then give up.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            stage.DisableAsync(cts.Token).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            s_logCleanupFailed(_log, ex);
+        }
     }
 
     private void LogUnhandled(string source, Exception ex)
@@ -230,6 +332,46 @@ public partial class HarnessApp : Application
         // recreate it after a HideAndRelease (which calls Window.Close and
         // prevents re-show on the same instance).
         services.AddTransient<SidebarOverlay>();
+        services.AddSingleton<Func<ISidebarOverlayHandle>>(sp =>
+            () => sp.GetRequiredService<SidebarOverlay>()
+        );
+
+        // Plan 03: register the full stage controller + collaborators so the
+        // harness's "Enable Stage" / "Disable Stage" buttons drive the real
+        // algorithm.
+        services.AddSingleton<IThumbnailSourceFactory, ThumbnailSourceFactory>();
+        services.AddSingleton<MonitorEnumerator>();
+        services.AddSingleton<IWorkAreaManager, WorkAreaManager>();
+        services.AddSingleton<ISceneGrouper, App.Services.Stage.SceneGrouper>();
+        services.AddSingleton<ISceneSwapExecutor, InstantSceneSwapExecutor>();
+        services.AddSingleton<IStageOverlayHost, StageOverlayHost>();
+        services.AddSingleton<App.Services.Snapshot.ISnapshotPathProvider>(
+            _ => new HarnessSnapshotPathProvider()
+        );
+        services.AddSingleton<App.Services.Snapshot.SnapshotStore>();
+        services.AddSingleton<ISnapshotStore>(sp =>
+            sp.GetRequiredService<App.Services.Snapshot.SnapshotStore>()
+        );
+        services.AddSingleton<App.Services.Snapshot.ISnapshotReader>(sp =>
+            sp.GetRequiredService<App.Services.Snapshot.SnapshotStore>()
+        );
+        services.AddSingleton<IStageController, StageController>();
+
+        // Crash recovery: re-attached via App.Shell's coordinator. On harness
+        // startup we run RunAsync once to clean up any leftover snapshot
+        // from a prior process that died with Stage active.
+        services.AddSingleton<CrashRecoveryCoordinator>();
+
+        // Click + Alt-Tab interaction coordinator. Without this the sidebar
+        // tile clicks raise SceneClicked but no one is listening — the whole
+        // user-driven swap path is dead.
+        services.AddSingleton<StageInteractionCoordinator>();
+    }
+
+    private sealed class HarnessSnapshotPathProvider : App.Services.Snapshot.ISnapshotPathProvider
+    {
+        public string SnapshotFilePath { get; } =
+            Path.Combine(Path.GetTempPath(), "stagehand-harness-snapshot.json");
     }
 
     /// <summary>

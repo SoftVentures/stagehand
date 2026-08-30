@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using App.Core.Branding;
+using App.Core.Stage;
 using App.Services.Settings;
 using App.Shell.Settings;
 using H.NotifyIcon;
@@ -39,16 +40,28 @@ public sealed class TrayIconHost : IDisposable
         "Exit requested from tray."
     );
 
-    private static readonly Action<ILogger, Exception?> LogStageTogglePlaceholder =
-        LoggerMessage.Define(
-            LogLevel.Information,
-            new EventId(4004, nameof(LogStageTogglePlaceholder)),
-            "Stage toggle requested — wired in Plan 03."
-        );
+    private static readonly Action<ILogger, Exception?> LogToggleEnable = LoggerMessage.Define(
+        LogLevel.Information,
+        new EventId(4004, nameof(LogToggleEnable)),
+        "Tray left-click: enabling Stage."
+    );
+
+    private static readonly Action<ILogger, Exception?> LogToggleDisable = LoggerMessage.Define(
+        LogLevel.Information,
+        new EventId(4005, nameof(LogToggleDisable)),
+        "Tray left-click: disabling Stage."
+    );
+
+    private static readonly Action<ILogger, Exception?> LogToggleFailed = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(4006, nameof(LogToggleFailed)),
+        "Tray left-click: stage toggle failed."
+    );
 
     private readonly ILogger<TrayIconHost> _log;
     private readonly ISettingsPathProvider _paths;
     private readonly Func<SettingsWindow> _settingsFactory;
+    private readonly IStageController _stage;
     private TaskbarIcon? _icon;
     private SettingsWindow? _settingsWindow;
 
@@ -56,15 +69,18 @@ public sealed class TrayIconHost : IDisposable
     public TrayIconHost(
         ILogger<TrayIconHost> log,
         ISettingsPathProvider paths,
-        Func<SettingsWindow> settingsFactory
+        Func<SettingsWindow> settingsFactory,
+        IStageController stage
     )
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(settingsFactory);
+        ArgumentNullException.ThrowIfNull(stage);
         _log = log;
         _paths = paths;
         _settingsFactory = settingsFactory;
+        _stage = stage;
     }
 
     /// <summary>Creates the <see cref="TaskbarIcon"/> and wires its context menu.</summary>
@@ -157,7 +173,31 @@ public sealed class TrayIconHost : IDisposable
         Application.Current.Shutdown();
     }
 
-    private void OnLeftClick() => LogStageTogglePlaceholder(_log, null);
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Tray click is an entry point — every failure must be caught and surfaced rather than crashing the dispatcher."
+    )]
+    private async void OnLeftClick()
+    {
+        try
+        {
+            if (_stage.IsEnabled)
+            {
+                LogToggleDisable(_log, null);
+                await _stage.DisableAsync(CancellationToken.None).ConfigureAwait(true);
+            }
+            else
+            {
+                LogToggleEnable(_log, null);
+                await _stage.EnableAsync(CancellationToken.None).ConfigureAwait(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogToggleFailed(_log, ex);
+        }
+    }
 }
 
 /// <summary>Minimal <see cref="ICommand"/> adapter for non-MVVM tray callbacks.</summary>

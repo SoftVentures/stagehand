@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using App.Core.Branding;
 using App.Core.Layout;
@@ -48,7 +50,7 @@ public enum SidebarEdge
 /// HWND is still valid.
 /// </para>
 /// </remarks>
-public sealed partial class SidebarOverlay : Window
+public sealed partial class SidebarOverlay : Window, ISidebarOverlayHandle
 {
     private const int WmDpiChanged = 0x02E0;
 
@@ -106,6 +108,23 @@ public sealed partial class SidebarOverlay : Window
     private HwndSource? _hwndSource;
     private bool _styleApplied;
 
+    // Plan 03 §S4: track which scene each tile represents, so WM_LBUTTONUP
+    // can hit-test against tile rectangles and raise TileClicked. Captured
+    // by SyncScenes; cleared on the next sync.
+    private readonly List<SceneTileEntry> _sceneTiles = [];
+
+    // Last destination rect applied to each thumbnail, used for hit-testing.
+    // Maintained by RecomputeAndApplyLayout.
+    private readonly Dictionary<WindowIdentity, Rect> _lastTileRects = [];
+
+    private sealed record SceneTileEntry(SceneId Scene, WindowIdentity Primary, int WindowCount);
+
+    /// <summary>
+    /// Raised when the user left-clicks a scene tile inside the overlay.
+    /// The event fires on the overlay's UI thread.
+    /// </summary>
+    public event EventHandler<SidebarTileClickedEventArgs>? TileClicked;
+
     /// <summary>
     /// DI-friendly constructor. The overlay is NOT a DI singleton (see
     /// class remarks); callers typically <c>new</c> one per monitor on
@@ -126,6 +145,18 @@ public sealed partial class SidebarOverlay : Window
 
         InitializeComponent();
         Title = BrandConstants.OverlayWindowTitle;
+
+        // Plan 03 §S4 click path. Using WPF's tunneling Preview event
+        // (rather than the WM_LBUTTONUP path through HwndSource.AddHook)
+        // is more reliable on AllowsTransparency=True windows: the WndProc
+        // hook fires inconsistently when the layered-window compositor
+        // decides a near-zero-alpha pixel is "click-through". The window
+        // Background must have meaningful alpha (>=~25%) for Win32 to
+        // route the mouse event into the WPF surface at all — see the
+        // SidebarOverlay.xaml Background note.
+        PreviewMouseLeftButtonDown += OnSidebarLeftButtonDown;
+        MouseMove += OnSidebarMouseMove;
+        MouseLeave += OnSidebarMouseLeave;
     }
 
     /// <summary>
@@ -369,6 +400,118 @@ public sealed partial class SidebarOverlay : Window
         return IntPtr.Zero;
     }
 
+    private void OnSidebarMouseMove(object sender, MouseEventArgs e)
+    {
+        Point posDip = e.GetPosition(this);
+        var hit = HitTest(posDip.X, posDip.Y);
+        if (hit is null)
+        {
+            HoverHighlight.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (!_lastTileRects.TryGetValue(hit.Value.Primary, out Rect r) || _monitor is not { } mon)
+        {
+            HoverHighlight.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var scale = mon.DpiScale == 0 ? 1.0 : mon.DpiScale;
+        // Convert tile rect (physical pixels) back to DIPs for WPF positioning.
+        Canvas.SetLeft(HoverHighlight, r.X / scale);
+        Canvas.SetTop(HoverHighlight, r.Y / scale);
+        HoverHighlight.Width = r.Width / scale;
+        HoverHighlight.Height = r.Height / scale;
+        HoverHighlight.Visibility = Visibility.Visible;
+    }
+
+    private void OnSidebarMouseLeave(object sender, MouseEventArgs e)
+    {
+        HoverHighlight.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnSidebarLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        Point posDip = e.GetPosition(this);
+        var clickPx = HitTest(posDip.X, posDip.Y);
+        if (clickPx is not { } hit)
+        {
+            return;
+        }
+        e.Handled = true;
+        TileClicked?.Invoke(this, new SidebarTileClickedEventArgs(hit.Scene, hit.Primary));
+    }
+
+    private (SceneId Scene, WindowIdentity Primary)? HitTest(double xClientDip, double yClientDip)
+    {
+        if (_monitor is not { } mon || _sceneTiles.Count == 0)
+        {
+            return null;
+        }
+        var scale = mon.DpiScale == 0 ? 1.0 : mon.DpiScale;
+        var xPx = (int)Math.Round(xClientDip * scale);
+        var yPx = (int)Math.Round(yClientDip * scale);
+
+        foreach (SceneTileEntry tile in _sceneTiles)
+        {
+            if (
+                _lastTileRects.TryGetValue(tile.Primary, out Rect r)
+                && xPx >= r.X
+                && xPx < r.X + r.Width
+                && yPx >= r.Y
+                && yPx < r.Y + r.Height
+            )
+            {
+                return (tile.Scene, tile.Primary);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Scene-aware variant of <see cref="Sync"/>. Each <see cref="Scene"/>
+    /// renders as one tile (the scene's primary thumbnail); <see cref="TileClicked"/>
+    /// resolves clicks back to the scene id.
+    /// </summary>
+    public void SyncScenes(IReadOnlyList<Scene> scenes)
+    {
+        ArgumentNullException.ThrowIfNull(scenes);
+
+        _sceneTiles.Clear();
+        var synthetic = new List<WindowSnapshot>(scenes.Count);
+        // Build a synthetic WindowSnapshot per scene so the existing
+        // window-list Sync pipeline can be reused. Filter-related fields
+        // (Style, ExStyle, ClassName, ProcessName, IsCloaked, HasOwner)
+        // are intentionally zeroed because the layout engine only reads
+        // (Identity, Bounds). When Plan 04 adds layout choices that depend
+        // on the filter fields (e.g. badge styling for cloaked apps),
+        // pipe them through SceneTileEntry instead of rediscovering them.
+        foreach (Scene scene in scenes)
+        {
+            ParkedWindow primaryPw = scene.Windows.First(pw => pw.Identity == scene.Primary);
+            synthetic.Add(
+                new WindowSnapshot(
+                    Hwnd: scene.Primary.Hwnd,
+                    Title: scene.Title,
+                    ClassName: string.Empty,
+                    ProcessId: scene.Primary.ProcessId,
+                    ProcessStartTimeUtcTicks: scene.Primary.ProcessStartTimeUtcTicks,
+                    Bounds: primaryPw.OriginalBounds,
+                    Monitor: IntPtr.Zero,
+                    IsVisible: true,
+                    IsCloaked: false,
+                    IsTopLevel: true,
+                    Style: 0,
+                    ExStyle: 0,
+                    HasOwner: false,
+                    ProcessName: string.Empty
+                )
+            );
+            _sceneTiles.Add(new SceneTileEntry(scene.Id, scene.Primary, scene.Windows.Count));
+        }
+
+        Sync(synthetic);
+    }
+
     private void PositionWindow()
     {
         if (_monitor is not { } mon)
@@ -446,11 +589,13 @@ public sealed partial class SidebarOverlay : Window
         );
 
         IReadOnlyList<ThumbnailPlacement> placements = _layout.Compute(request);
+        _lastTileRects.Clear();
         foreach (ThumbnailPlacement placement in placements)
         {
             if (_liveThumbnails.TryGetValue(placement.Identity, out DwmThumbnail? thumb))
             {
                 thumb.UpdateDestinationRect(placement.DestinationRect);
+                _lastTileRects[placement.Identity] = placement.DestinationRect;
             }
         }
     }
@@ -460,3 +605,13 @@ public sealed partial class SidebarOverlay : Window
 
     // The App.Interop.Size type has a property named IsEmpty — see Size.cs.
 }
+
+/// <summary>Payload for <see cref="SidebarOverlay.TileClicked"/>.</summary>
+/// <param name="Scene">The scene whose tile was clicked.</param>
+/// <param name="Primary">The clicked tile's primary window identity.</param>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Naming",
+    "CA1711:Identifiers should not have incorrect suffix",
+    Justification = "Matches Plan-03 spec; the type is an event payload."
+)]
+public sealed record SidebarTileClickedEventArgs(SceneId Scene, WindowIdentity Primary);

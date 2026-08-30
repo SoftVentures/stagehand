@@ -195,6 +195,41 @@ public sealed class WindowControllerTests
             );
     }
 
+    [Fact]
+    public void Resize_RestoresMaximisedWindowBeforeSettingPos()
+    {
+        // Regression: pre-Plan-03-fix, maximised windows ignored the new
+        // bounds because WINDOWPLACEMENT.showCmd stayed SW_MAXIMIZE.
+        (INativeWindowApi api, WindowController controller) = BuildController();
+        api.IsZoomed(TestHwnd).Returns(true);
+        api.SetWindowPos(Arg.Any<IntPtr>(), Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>())
+            .Returns(true);
+
+        controller.Resize(TestHwnd, new Rect(0, 0, 800, 600));
+
+        Received.InOrder(() =>
+        {
+            api.ShowWindow(
+                TestHwnd,
+                9 /* SW_RESTORE */
+            );
+            api.SetWindowPos(TestHwnd, Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>());
+        });
+    }
+
+    [Fact]
+    public void Resize_NonMaximisedWindow_DoesNotCallShowWindow()
+    {
+        (INativeWindowApi api, WindowController controller) = BuildController();
+        api.IsZoomed(TestHwnd).Returns(false);
+        api.SetWindowPos(Arg.Any<IntPtr>(), Arg.Any<Rect>(), Arg.Any<SetWindowPosFlags>())
+            .Returns(true);
+
+        controller.Resize(TestHwnd, new Rect(0, 0, 800, 600));
+
+        api.DidNotReceive().ShowWindow(TestHwnd, Arg.Any<int>());
+    }
+
     // -------------------------------------------------------------------
     // BringToFront
     // -------------------------------------------------------------------
@@ -211,6 +246,31 @@ public sealed class WindowControllerTests
         api.DidNotReceive().GetCurrentThreadId();
         api.DidNotReceive().SetForegroundWindow(Arg.Any<IntPtr>());
         api.DidNotReceive().AttachThreadInput(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<bool>());
+    }
+
+    [Fact]
+    public void BringToFront_RestoresMinimisedWindow()
+    {
+        // Regression: clicking a tile for a minimised window must restore
+        // it before SetForegroundWindow — otherwise the OS marks the iconic
+        // HWND foreground and the user sees the desktop instead of the app.
+        (INativeWindowApi api, WindowController controller) = BuildController();
+        api.IsIconic(TestHwnd).Returns(true);
+        api.GetForegroundWindow().Returns(new IntPtr(0xDEAD));
+        api.GetCurrentThreadId().Returns(42u);
+        api.GetWindowThreadProcessId(TestHwnd, out var _).Returns(42u);
+        api.SetForegroundWindow(TestHwnd).Returns(true);
+
+        controller.BringToFront(TestHwnd);
+
+        Received.InOrder(() =>
+        {
+            api.ShowWindow(
+                TestHwnd,
+                9 /* SW_RESTORE */
+            );
+            _ = api.SetForegroundWindow(TestHwnd);
+        });
     }
 
     [Fact]

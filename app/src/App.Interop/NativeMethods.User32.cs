@@ -314,6 +314,33 @@ internal static partial class NativeMethods
     internal static partial bool IsWindow(IntPtr hWnd);
 
     // ---------------------------------------------------------------------
+    // Window placement (restored bounds for minimised windows)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>WINDOWPLACEMENT</c> struct — exposes <c>rcNormalPosition</c>, the
+    /// rect the window will occupy after <c>ShowWindow(SW_RESTORE)</c>.
+    /// Stagehand reads it to render layout-correct tiles for windows that
+    /// were minimised at the moment Stage was enabled.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WINDOWPLACEMENT
+    {
+        public uint length;
+        public uint flags;
+        public uint showCmd;
+        public POINT ptMinPosition;
+        public POINT ptMaxPosition;
+        public RECT rcNormalPosition;
+    }
+
+    // consumer: plan 03 §WindowEnumerator (minimised-window placement)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getwindowplacement"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    // ---------------------------------------------------------------------
     // Window styles
     // ---------------------------------------------------------------------
 
@@ -656,4 +683,158 @@ internal static partial class NativeMethods
         IntPtr wParam,
         IntPtr lParam
     );
+
+    // ---------------------------------------------------------------------
+    // Message-only windows + hotkeys (Plan 03)
+    // ---------------------------------------------------------------------
+
+    // HWND_MESSAGE — pass to CreateWindowEx as parent to create a
+    // message-only window (no rendering, off-screen, receives messages).
+    /// <see href="https://learn.microsoft.com/windows/win32/winmsg/window-features#message-only-windows"/>
+    internal static readonly IntPtr HWND_MESSAGE = new(-3);
+
+    // Selected window messages used by Plan 03.
+    /// <see href="https://learn.microsoft.com/windows/win32/inputdev/wm-hotkey"/>
+    internal const uint WM_HOTKEY = 0x0312;
+
+    /// <see href="https://learn.microsoft.com/windows/win32/gdi/wm-displaychange"/>
+    internal const uint WM_DISPLAYCHANGE = 0x007E;
+
+    /// <see href="https://learn.microsoft.com/windows/win32/winmsg/wm-destroy"/>
+    internal const uint WM_DESTROY = 0x0002;
+
+    /// <see href="https://learn.microsoft.com/windows/win32/inputdev/wm-lbuttonup"/>
+    internal const uint WM_LBUTTONUP = 0x0202;
+
+    /// <see href="https://learn.microsoft.com/windows/win32/inputdev/wm-mousemove"/>
+    internal const uint WM_MOUSEMOVE = 0x0200;
+
+    // RegisterHotKey modifier flags. MOD_NOREPEAT prevents auto-repeat
+    // delivery while the user holds the chord — we want one fire per press.
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey"/>
+    internal const uint MOD_ALT = 0x0001;
+    internal const uint MOD_CONTROL = 0x0002;
+    internal const uint MOD_SHIFT = 0x0004;
+    internal const uint MOD_WIN = 0x0008;
+    internal const uint MOD_NOREPEAT = 0x4000;
+
+    // Subset of virtual-key codes used by the Plan-03 hard-coded hotkey.
+    // Plan 04 makes the hotkey configurable; until then only VK_S is wired.
+    /// <see href="https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes"/>
+    internal const uint VK_S = 0x53;
+
+    // CreateWindowEx return value sentinels — failures return IntPtr.Zero.
+
+    /// <summary>
+    /// Native WNDPROC callback. Pinned in managed memory by the consumer
+    /// (held as an instance field) for as long as the underlying HWND
+    /// exists; the OS holds a raw function pointer to it.
+    /// </summary>
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nc-winuser-wndproc"/>
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>
+    /// Native WNDCLASSEXW. Only the fields Plan 03 needs are populated by
+    /// callers; <c>cbSize</c> must equal <c>Marshal.SizeOf&lt;WNDCLASSEXW&gt;()</c>.
+    /// </summary>
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/ns-winuser-wndclassexw"/>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct WNDCLASSEXW
+    {
+        public uint cbSize;
+        public uint style;
+        public WndProcDelegate? lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
+        public string? lpszMenuName;
+        public string? lpszClassName;
+        public IntPtr hIconSm;
+    }
+
+    // consumer: plan 03 §S0 MessageOnlyWindow
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerclassexw"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "RegisterClassExW"
+    )]
+    internal static extern ushort RegisterClassEx(ref WNDCLASSEXW lpwcx);
+
+    // consumer: plan 03 §S0 MessageOnlyWindow (Dispose path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-unregisterclassw"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "UnregisterClassW"
+    )]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnregisterClass(string lpClassName, IntPtr hInstance);
+
+    // consumer: plan 03 §S0 MessageOnlyWindow
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createwindowexw"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "CreateWindowExW"
+    )]
+    internal static extern IntPtr CreateWindowEx(
+        uint dwExStyle,
+        string lpClassName,
+        string? lpWindowName,
+        uint dwStyle,
+        int X,
+        int Y,
+        int nWidth,
+        int nHeight,
+        IntPtr hWndParent,
+        IntPtr hMenu,
+        IntPtr hInstance,
+        IntPtr lpParam
+    );
+
+    // consumer: plan 03 §S0 MessageOnlyWindow (Dispose path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-destroywindow"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DestroyWindow(IntPtr hWnd);
+
+    // consumer: plan 03 §S0 MessageOnlyWindow (default-message handler)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-defwindowprocw"/>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "DefWindowProcW")]
+    internal static extern IntPtr DefWindowProc(
+        IntPtr hWnd,
+        uint Msg,
+        IntPtr wParam,
+        IntPtr lParam
+    );
+
+    // consumer: plan 03 §S8 HotkeyService
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    // consumer: plan 03 §S8 HotkeyService (Dispose path)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-unregisterhotkey"/>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    // consumer: plan 03 §S0 MessageOnlyWindow (synchronous post into another HWND for tests)
+    /// <see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendmessagew"/>
+    [DllImport(
+        "user32.dll",
+        SetLastError = true,
+        CharSet = CharSet.Unicode,
+        EntryPoint = "SendMessageW"
+    )]
+    internal static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 }

@@ -175,6 +175,15 @@ public sealed class WindowController : IWindowController
     {
         _ui.AssertOnUiThread();
 
+        // Maximised or minimised windows ignore SetWindowPos for sizing —
+        // they snap right back to their prior maximised/iconic rect because
+        // WINDOWPLACEMENT.showCmd is still SW_MAXIMIZE/SW_SHOWMINIMIZED.
+        // Restore first, then position.
+        if (_api.IsZoomed(hwnd) || _api.IsIconic(hwnd))
+        {
+            _ = _api.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+        }
+
         // No NoRedraw here: the app should repaint its chrome at the new size.
         SetWindowPosOrThrow(
             hwnd,
@@ -189,6 +198,14 @@ public sealed class WindowController : IWindowController
     public void BringToFront(IntPtr hwnd)
     {
         _ui.AssertOnUiThread();
+
+        // Minimised windows must be restored before SetForegroundWindow —
+        // otherwise the OS happily marks them foreground while leaving them
+        // minimised, so the user sees the desktop instead of the app.
+        if (_api.IsIconic(hwnd))
+        {
+            _ = _api.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+        }
 
         // Short-circuit: already foreground → nothing to do. Avoids the
         // AttachThreadInput churn for the common case of clicking a window

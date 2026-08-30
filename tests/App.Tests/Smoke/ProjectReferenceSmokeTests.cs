@@ -50,16 +50,12 @@ public sealed class ProjectReferenceSmokeTests
     [Fact]
     public void DI_Resolves_Non_WPF_Services()
     {
-        // AppDataSettingsPathProvider creates real %APPDATA%\Stagehand and
-        // %LOCALAPPDATA%\Stagehand\logs directories on construction — accepted
-        // side effect (happens once per dev machine anyway).
-        var services = new ServiceCollection();
-        services.AddSingleton<ISettingsPathProvider, AppDataSettingsPathProvider>();
-        services.AddSingleton<ILoggerFactory, NullLoggerFactory>();
-        services.AddLogging();
-        services.ConfigureStagehand();
-
-        using ServiceProvider provider = services.BuildServiceProvider();
+        // Plan 03: the real StageController transitively depends on
+        // WindowController, which depends on UiDispatcher — and the default
+        // UiDispatcher factory reads Application.Current.Dispatcher (null in a
+        // unit test). BuildMinimalProvider substitutes a dispatcher-free
+        // UiDispatcher, sufficient for resolution.
+        using ServiceProvider provider = BuildMinimalProvider();
 
         provider.GetRequiredService<IStageController>().Should().NotBeNull();
         provider.GetRequiredService<ISettingsService>().Should().NotBeNull();

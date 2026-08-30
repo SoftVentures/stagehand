@@ -189,6 +189,38 @@ internal interface INativeWindowApi
     bool ShowWindow(IntPtr hwnd, int nCmdShow);
 
     /// <summary>
+    /// True when <paramref name="hwnd"/> is currently maximised
+    /// (<c>WS_MAXIMIZE</c> set, equivalent to <c>IsZoomed</c>).
+    /// Callers that intend to <c>SetWindowPos</c> a maximised window must
+    /// first issue <c>ShowWindow(SW_RESTORE)</c> — otherwise Windows treats
+    /// the new bounds as the "restored" rect and snaps the window straight
+    /// back to its prior maximised geometry on the next paint.
+    /// </summary>
+    bool IsZoomed(IntPtr hwnd);
+
+    /// <summary>
+    /// True when <paramref name="hwnd"/> is currently minimised
+    /// (<c>IsIconic</c>). <c>GetWindowRect</c> returns the off-screen iconic
+    /// position (typically <c>(-32000, -32000, …)</c>) for such windows —
+    /// not useful for layout, restore, or thumbnail aspect ratio.
+    /// </summary>
+    bool IsIconic(IntPtr hwnd);
+
+    /// <summary>
+    /// Returns the rect the window occupies (or will occupy after
+    /// <c>SW_RESTORE</c>) — i.e. <c>GetWindowPlacement.rcNormalPosition</c>
+    /// when the window is minimised, otherwise <c>GetWindowRect</c>.
+    /// Callers that need a stable, layout-meaningful bounding rect (sidebar
+    /// thumbnails, restore-on-disable) read this instead of
+    /// <see cref="GetWindowRect"/>.
+    /// </summary>
+    /// <exception cref="App.Interop.Errors.Win32InteropException">
+    /// Both <c>GetWindowPlacement</c> and the fallback <c>GetWindowRect</c>
+    /// failed.
+    /// </exception>
+    Rect GetRestoredBounds(IntPtr hwnd);
+
+    /// <summary>
     /// Attaches or detaches the input-processing mechanism of two threads.
     /// Used by <c>WindowController.BringToFront</c> to side-step the
     /// foreground-lock timeout.

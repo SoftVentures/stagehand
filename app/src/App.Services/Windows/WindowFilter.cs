@@ -35,6 +35,7 @@ public sealed class WindowFilter : IWindowFilter, IDisposable
 
     private readonly ISettingsService _settings;
     private readonly ILogger<WindowFilter> _log;
+    private readonly int _currentProcessId;
     private readonly object _cacheLock = new();
 
     // Swapped atomically by UpdateCache under _cacheLock. Reads on any thread
@@ -49,12 +50,24 @@ public sealed class WindowFilter : IWindowFilter, IDisposable
     /// <see cref="ISettingsService.Changed"/>.
     /// </summary>
     public WindowFilter(ISettingsService settings, ILogger<WindowFilter> log)
+        : this(settings, log, Environment.ProcessId) { }
+
+    /// <summary>
+    /// Test-only seam: lets tests inject a fixed current-process id so
+    /// rule 0 (self-exclusion) is deterministic without spawning processes.
+    /// </summary>
+    internal WindowFilter(
+        ISettingsService settings,
+        ILogger<WindowFilter> log,
+        int currentProcessId
+    )
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(log);
 
         _settings = settings;
         _log = log;
+        _currentProcessId = currentProcessId;
         _excludedApps = BuildExcludedSet(settings.Current);
         _settings.Changed += OnSettingsChanged;
     }
@@ -62,6 +75,18 @@ public sealed class WindowFilter : IWindowFilter, IDisposable
     /// <inheritdoc />
     public bool IsManageable(WindowSnapshot snapshot)
     {
+        // Rule 0 — never manage Stagehand's own windows. Class-based exclusion
+        // (rule 5) covers the production overlay + settings windows because we
+        // register them with branded class names, but the harness's WPF main
+        // window uses a default `HwndWrapper[…]` class — without this rule
+        // "Enable Stage" would park the harness off-screen and look like a
+        // crash. Cheap PID compare runs first so the rest of the pipeline
+        // never sees our own HWNDs.
+        if (snapshot.ProcessId == _currentProcessId)
+        {
+            return false;
+        }
+
         // Rule 1 — IsWindowVisible.
         if (!snapshot.IsVisible)
         {

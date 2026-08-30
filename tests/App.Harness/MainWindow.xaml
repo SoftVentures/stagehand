@@ -128,6 +128,19 @@
                     Padding="8,4"
                     Click="OnRegisterHookClicked"
                     Content="Register hook" />
+                <Separator Margin="0,8" />
+                <Button
+                    x:Name="EnableStageButton"
+                    Margin="0,2"
+                    Padding="8,4"
+                    Click="OnEnableStageClicked"
+                    Content="Enable Stage (Plan 03)" />
+                <Button
+                    x:Name="DisableStageButton"
+                    Margin="0,2"
+                    Padding="8,4"
+                    Click="OnDisableStageClicked"
+                    Content="Disable Stage (Plan 03)" />
             </StackPanel>
 
             <StackPanel

@@ -9,6 +9,10 @@ using App.Services.Logging;
 using App.Services.Settings;
 using App.Services.Updates;
 using App.Services.Windows;
+using App.Shell.Interaction;
+using App.Shell.Monitors;
+using App.Shell.Overlay;
+using App.Shell.Recovery;
 using App.Shell.Settings;
 using App.Shell.Tray;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,11 +63,42 @@ public static class ServiceConfiguration
         services.AddSingleton<WinEventHookThread>();
         services.AddSingleton<IWinEventHookFactory, WinEventHookFactory>();
 
-        // Stubs targeting Plans 03–05.
-        services.AddSingleton<IWorkAreaManager, NotImplementedWorkAreaManager>();
-        services.AddSingleton<IStageController, NotImplementedStageController>();
+        // Plan 03 multi-monitor + work-area.
+        services.AddSingleton<MonitorEnumerator>();
+        services.AddSingleton<IWorkAreaManager, WorkAreaManager>();
+
+        // Plan 03 stage controller + scene infrastructure.
+        services.AddSingleton<ISceneGrouper, App.Services.Stage.SceneGrouper>();
+        services.AddSingleton<ISceneSwapExecutor, InstantSceneSwapExecutor>();
+        // SidebarOverlay is transient (one per monitor); the host resolves
+        // a fresh ISidebarOverlayHandle (the WPF window implements it) per
+        // CreateForMonitor call via this factory.
+        services.AddTransient<SidebarOverlay>();
+        services.AddSingleton<Func<ISidebarOverlayHandle>>(sp =>
+            () => sp.GetRequiredService<SidebarOverlay>()
+        );
+        services.AddSingleton<IStageOverlayHost, StageOverlayHost>();
+        // Snapshot store + path provider for crash recovery.
+        services.AddSingleton<
+            App.Services.Snapshot.ISnapshotPathProvider,
+            App.Services.Snapshot.AppDataSnapshotPathProvider
+        >();
+        services.AddSingleton<App.Services.Snapshot.SnapshotStore>();
+        services.AddSingleton<ISnapshotStore>(sp =>
+            sp.GetRequiredService<App.Services.Snapshot.SnapshotStore>()
+        );
+        services.AddSingleton<App.Services.Snapshot.ISnapshotReader>(sp =>
+            sp.GetRequiredService<App.Services.Snapshot.SnapshotStore>()
+        );
+        services.AddSingleton<IStageController, StageController>();
+        services.AddSingleton<StageInteractionCoordinator>();
+        services.AddSingleton<DisplayChangeListener>();
+        services.AddSingleton<MonitorChangeCoordinator>();
+        services.AddSingleton<CrashRecoveryCoordinator>();
+
+        // Stubs targeting later plans.
         services.AddSingleton<IStageLayoutEngine, NotImplementedStageLayoutEngine>();
-        services.AddSingleton<IHotkeyService, StubHotkeyService>();
+        services.AddSingleton<IHotkeyService, HotkeyService>();
         services.AddSingleton<IUpdateService, StubUpdateService>();
 
         // UI-layer services.

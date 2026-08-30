@@ -2,6 +2,18 @@
   "name": "stagehand-tooling",
   "version": "0.0.0",
   "private": true,
+  "scripts": {
+    "setup": "pwsh ./scripts/setup.ps1",
+    "build": "pwsh ./scripts/build.ps1",
+    "build:release": "pwsh ./scripts/build-release.ps1",
+    "test": "pwsh ./scripts/test.ps1",
+    "start": "pwsh ./scripts/run.ps1",
+    "harness": "pwsh ./scripts/harness.ps1",
+    "format": "pwsh ./scripts/format.ps1",
+    "check": "pwsh ./scripts/check.ps1",
+    "rescue": "pwsh ./scripts/rescue.ps1",
+    "clean": "pwsh ./scripts/clean.ps1"
+  },
   "devDependencies": {
     "prettier": "^3.8.3"
   }

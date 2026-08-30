@@ -77,6 +77,34 @@ public sealed class WindowFilterTests
     private static WindowFilter NewFilter(ISettingsService? settings = null) =>
         new(settings ?? SettingsWith(), NullLogger<WindowFilter>.Instance);
 
+    // App.Services exposes an internal ctor variant for deterministic
+    // current-process testing (rule 0). InternalsVisibleTo("App.Tests") in
+    // App.Services/AssemblyInfo.cs grants access.
+    private static WindowFilter NewFilterWithCurrentPid(int currentPid) =>
+        new(SettingsWith(), NullLogger<WindowFilter>.Instance, currentPid);
+
+    // ------------------------------------------------------------------
+    // Rule 0 — never manage Stagehand's own windows (current process)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Rule0_OwnProcessWindow_IsExcluded()
+    {
+        WindowFilter filter = NewFilterWithCurrentPid(currentPid: 1234);
+
+        // A snapshot whose process matches "us" is rejected even though every
+        // other rule would pass.
+        filter.IsManageable(ManageableSnapshot(processId: 1234)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Rule0_DifferentProcessWindow_IsAllowed()
+    {
+        WindowFilter filter = NewFilterWithCurrentPid(currentPid: 1234);
+
+        filter.IsManageable(ManageableSnapshot(processId: 5678)).Should().BeTrue();
+    }
+
     // ------------------------------------------------------------------
     // Rule 1 — IsWindowVisible
     // ------------------------------------------------------------------

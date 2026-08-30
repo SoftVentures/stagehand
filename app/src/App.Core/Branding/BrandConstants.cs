@@ -89,4 +89,24 @@ public static class BrandConstants
     /// is the single source of truth.
     /// </summary>
     public const string SettingsWindowClassName = $"{ProductName}-Settings";
+
+    /// <summary>
+    /// Class-name prefix for hidden message-only windows the app uses
+    /// internally (Plan 03 §S0). Suffixed per-instance with a GUID so
+    /// multiple instances coexist. Visible in Spy++ and tooling that
+    /// inspects window-class registrations.
+    /// </summary>
+    public const string MessageWindowClassPrefix = $"{ProductName}.MessageOnly";
+
+    /// <summary>
+    /// Class-name prefix for the hidden window that owns Win32
+    /// <c>RegisterHotKey</c> registrations (Plan 03 §S8 HotkeyService).
+    /// </summary>
+    public const string HotkeyWindowClassPrefix = $"{ProductName}.Hotkeys";
+
+    /// <summary>
+    /// Class-name prefix for the hidden window that listens for
+    /// <c>WM_DISPLAYCHANGE</c> (Plan 03 §S6 DisplayChangeListener).
+    /// </summary>
+    public const string DisplayChangeWindowClassPrefix = $"{ProductName}.DisplayChangeListener";
 }

@@ -14,27 +14,16 @@ namespace App.Tests.State;
 public sealed class StageStateTests
 {
     [Fact]
-    public void Empty_IsDisabled_WithNoParkedWindows()
+    public void Empty_IsDisabled_WithNoScenes()
     {
         StageState s = StageState.Empty;
 
         s.Phase.Should().Be(StagePhase.Disabled);
-        s.Parked.Should().BeEmpty();
-        s.ActiveHwndByDevice.Should().BeEmpty();
+        s.ScenesByDevice.Should().BeEmpty();
+        s.ActiveSceneByDevice.Should().BeEmpty();
         s.SavedWorkAreasByDevice.Should().BeEmpty();
         s.ExcludedWindows.Should().BeEmpty();
         s.IsPaused.Should().BeFalse();
-    }
-
-    [Fact]
-    public void Disabled_Must_Have_Empty_Parked_List_Invariant()
-    {
-        // This invariant is not enforced in the record itself (records are immutable
-        // snapshots, not self-validating constructors). It is a contract upheld by
-        // StageController — the test documents the expected invariant so future code
-        // does not violate it silently.
-        StageState s = StageState.Empty;
-        (s.Phase == StagePhase.Disabled && s.Parked.IsEmpty).Should().BeTrue();
     }
 
     [Fact]
@@ -46,14 +35,96 @@ public sealed class StageStateTests
     }
 
     [Fact]
+    public void SceneId_New_Returns_Unique_Values()
+    {
+        SceneId a = SceneId.New();
+        SceneId b = SceneId.New();
+        a.Should().NotBe(b);
+    }
+
+    [Fact]
+    public void Scene_Constructor_Rejects_Empty_Window_List()
+    {
+        Action act = () =>
+        {
+            _ = new Scene(
+                SceneId.New(),
+                "x",
+                ImmutableList<ParkedWindow>.Empty,
+                new WindowIdentity(IntPtr.Zero, 0, 0),
+                DateTimeOffset.UtcNow
+            );
+        };
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Scene_Constructor_Rejects_Primary_Not_In_Windows()
+    {
+        var pw = new ParkedWindow(
+            new WindowIdentity(new IntPtr(1), 1, 1L),
+            new App.Interop.Rect(0, 0, 100, 100),
+            @"\\.\DISPLAY1",
+            IsElevated: false
+        );
+        Action act = () =>
+        {
+            _ = new Scene(
+                SceneId.New(),
+                "x",
+                [pw],
+                new WindowIdentity(new IntPtr(2), 2, 2L), // not in list
+                DateTimeOffset.UtcNow
+            );
+        };
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Scene_Constructor_Accepts_Primary_That_Is_In_Windows()
+    {
+        var id = new WindowIdentity(new IntPtr(1), 1, 1L);
+        var pw = new ParkedWindow(
+            id,
+            new App.Interop.Rect(0, 0, 100, 100),
+            @"\\.\DISPLAY1",
+            IsElevated: false
+        );
+        Action act = () =>
+        {
+            _ = new Scene(SceneId.New(), "x", [pw], id, DateTimeOffset.UtcNow);
+        };
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void ParkedWindow_Records_Compare_By_Value()
+    {
+        var id = new WindowIdentity(new IntPtr(1), 1, 1L);
+        var rect = new App.Interop.Rect(0, 0, 100, 100);
+        var a = new ParkedWindow(id, rect, @"\\.\DISPLAY1", IsElevated: false);
+        var b = new ParkedWindow(id, rect, @"\\.\DISPLAY1", IsElevated: false);
+        a.Should().Be(b);
+    }
+
+    [Fact]
+    public void ParkedWindow_IsElevated_Round_Trips()
+    {
+        var pw = new ParkedWindow(
+            new WindowIdentity(new IntPtr(1), 1, 1L),
+            new App.Interop.Rect(0, 0, 100, 100),
+            @"\\.\DISPLAY1",
+            IsElevated: true
+        );
+        pw.IsElevated.Should().BeTrue();
+    }
+
+    [Fact]
     public void Per_Device_Dictionaries_Are_Case_Sensitive_By_Default()
     {
-        // Device names like "\\\\.\\DISPLAY1" are returned by Win32 and are treated
-        // as exact strings. Consumers that need case-insensitive lookup should wrap
-        // explicitly.
-        ImmutableDictionary<string, nint?> s = StageState.Empty.ActiveHwndByDevice.Add(
+        ImmutableDictionary<string, SceneId?> s = StageState.Empty.ActiveSceneByDevice.Add(
             @"\\.\DISPLAY1",
-            IntPtr.Zero
+            null
         );
 
         s.ContainsKey(@"\\.\display1").Should().BeFalse();
@@ -64,12 +135,24 @@ public sealed class StageStateTests
     public void Per_Device_Dictionaries_Use_Ordinal_Key_Comparer()
     {
         // Guards against a well-meaning "fix" swapping the default comparer for
-        // StringComparer.OrdinalIgnoreCase, which would silently break multi-monitor
-        // restore (two distinct Win32 device names could then collapse into one key).
-        IEqualityComparer<string> activeCmp = StageState.Empty.ActiveHwndByDevice.KeyComparer;
+        // OrdinalIgnoreCase, which would silently break multi-monitor restore
+        // (two distinct Win32 device names could then collapse into one key).
+        IEqualityComparer<string> activeCmp = StageState.Empty.ActiveSceneByDevice.KeyComparer;
+        IEqualityComparer<string> scenesCmp = StageState.Empty.ScenesByDevice.KeyComparer;
         IEqualityComparer<string> workAreaCmp = StageState.Empty.SavedWorkAreasByDevice.KeyComparer;
 
         activeCmp.Equals(@"\\.\DISPLAY1", @"\\.\display1").Should().BeFalse();
+        scenesCmp.Equals(@"\\.\DISPLAY1", @"\\.\display1").Should().BeFalse();
         workAreaCmp.Equals(@"\\.\DISPLAY1", @"\\.\display1").Should().BeFalse();
+    }
+
+    [Fact]
+    public void StageTransitionException_Records_From_To()
+    {
+        var inner = new InvalidOperationException("boom");
+        var ex = new StageTransitionException(StagePhase.Disabled, StagePhase.Enabled, inner);
+        ex.From.Should().Be(StagePhase.Disabled);
+        ex.To.Should().Be(StagePhase.Enabled);
+        ex.InnerException.Should().BeSameAs(inner);
     }
 }

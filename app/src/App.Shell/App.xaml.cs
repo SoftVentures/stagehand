@@ -3,8 +3,13 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using App.Core.Stage;
+using App.Services.Hotkeys;
 using App.Services.Settings;
 using App.Shell.Composition;
+using App.Shell.Interaction;
+using App.Shell.Monitors;
+using App.Shell.Recovery;
 using App.Shell.Tray;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -86,6 +91,27 @@ public partial class ShellApp : Application
         TrayIconHost tray = _services.GetRequiredService<TrayIconHost>();
         tray.Start();
 
+        // Plan 03 §S5 / §S6 / §S7 / §S8 wiring: start the interaction
+        // coordinator, the display-change listener, run crash recovery, and
+        // register the hard-coded hotkey.
+        StageInteractionCoordinator interaction =
+            _services.GetRequiredService<StageInteractionCoordinator>();
+        interaction.Start();
+
+        DisplayChangeListener displayListener =
+            _services.GetRequiredService<DisplayChangeListener>();
+        MonitorChangeCoordinator monitorCoord =
+            _services.GetRequiredService<MonitorChangeCoordinator>();
+        displayListener.DisplayChanged += (_, _) => monitorCoord.Reconcile();
+
+        CrashRecoveryCoordinator recovery =
+            _services.GetRequiredService<CrashRecoveryCoordinator>();
+        _ = recovery.RunAsync(System.Threading.CancellationToken.None);
+
+        IHotkeyService hotkeys = _services.GetRequiredService<IHotkeyService>();
+        IStageController stage = _services.GetRequiredService<App.Core.Stage.IStageController>();
+        hotkeys.Register("stage-toggle", "Ctrl+Alt+S", () => _ = ToggleStageAsync(stage));
+
         if (args.diagnostics)
         {
             OpenLogsFolder(paths.LogDirectoryPath);
@@ -93,6 +119,18 @@ public partial class ShellApp : Application
 
         // ShutdownMode = OnExplicitShutdown is set in App.xaml; the app exits only
         // via TrayIconHost's "Exit" menu item.
+    }
+
+    private static async Task ToggleStageAsync(App.Core.Stage.IStageController stage)
+    {
+        if (stage.IsEnabled)
+        {
+            await stage.DisableAsync(System.Threading.CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            await stage.EnableAsync(System.Threading.CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />

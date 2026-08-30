@@ -226,6 +226,33 @@ internal sealed class NativeWindowApi : INativeWindowApi
 
     public bool ShowWindow(IntPtr hwnd, int nCmdShow) => NativeMethods.ShowWindow(hwnd, nCmdShow);
 
+    public bool IsZoomed(IntPtr hwnd) => NativeMethods.IsZoomed(hwnd);
+
+    public bool IsIconic(IntPtr hwnd) => NativeMethods.IsIconic(hwnd);
+
+    public Rect GetRestoredBounds(IntPtr hwnd)
+    {
+        if (NativeMethods.IsIconic(hwnd))
+        {
+            var wp = new NativeMethods.WINDOWPLACEMENT
+            {
+                length = (uint)Marshal.SizeOf<NativeMethods.WINDOWPLACEMENT>(),
+            };
+            if (NativeMethods.GetWindowPlacement(hwnd, ref wp))
+            {
+                return new Rect(
+                    wp.rcNormalPosition.Left,
+                    wp.rcNormalPosition.Top,
+                    wp.rcNormalPosition.Right - wp.rcNormalPosition.Left,
+                    wp.rcNormalPosition.Bottom - wp.rcNormalPosition.Top
+                );
+            }
+            // GetWindowPlacement failed — fall through to GetWindowRect (will
+            // be the iconic position, but better than throwing on a soft path).
+        }
+        return GetWindowRect(hwnd);
+    }
+
     public IntPtr GetForegroundWindow() => NativeMethods.GetForegroundWindow();
 
     public uint GetCurrentThreadId() => NativeMethods.GetCurrentThreadId();
